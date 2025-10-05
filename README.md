@@ -37,9 +37,14 @@ A comprehensive Mars surface exploration tool that combines NASA's Mars Global S
    pip install -r requirements
    ```
    
-   **Note**: The requirements file is configured for CPU-only PyTorch installation. This ensures compatibility across different systems without requiring CUDA/GPU setup.
+4. **Install CPU-only PyTorch** (required for SAM):
+   ```bash
+   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+   ```
+   
+   **Note**: This installs CPU-only versions of PyTorch and torchvision, ensuring compatibility across different systems without requiring CUDA/GPU setup.
 
-4. **Download SAM Model Checkpoint**:
+5. **Download SAM Model Checkpoint**:
    
    The application supports three SAM model variants. Choose one based on your needs:
 
