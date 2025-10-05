@@ -1,6 +1,6 @@
 # COSMOS
 
-this is a nasa space apps "Embeggden your eyes" challenge submission.
+this is a nasa space apps "Embiggen your eyes" challenge submission.
 
 ## how to run
 
