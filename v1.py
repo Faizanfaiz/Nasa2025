@@ -1811,14 +1811,14 @@ def save_feature(
         observation_date = obs.get("date", observation_date)
 
     feature_data = {
-        "name": str(name).strip(),
-        "lat": lat_val,
-        "lon": lon_val,
-        "notes": str(notes).strip() if notes else "",
-        "time": observation_date,
-        "source": "user",
-        "dataset": observation_title,
-    }
+            "name": str(name).strip(),
+            "lat": lat_val,
+            "lon": lon_val,
+            "notes": str(notes).strip() if notes else "",
+            "time": observation_date,
+            "source": "user",
+            "dataset": observation_title,
+        }
     if probe and isinstance(probe, dict):
         feature_data["elevation"] = probe.get("elevation")
 
@@ -1843,10 +1843,10 @@ def save_feature(
         )
     else:
         updated.append(feature_data)
-        message = html.Span(
+    message = html.Span(
             f"Saved feature '{feature_data['name']}' at {lat_val:.2f}N, {lon_val:.2f}E",
-            style={"color": "#34d399"},
-        )
+        style={"color": "#34d399"},
+    )
     persist_feature_collection(updated)
     return updated, message, next_edit_index, "", "", None, None
 
@@ -1894,18 +1894,18 @@ def render_feature_layers(features: Sequence[Dict[str, Any]]):
         cards.append(
             html.Div(
                 [
-                    html.Div(
-                        [
-                            html.Strong(feature.get("name", "Feature")),
-                            html.Span(
-                                f"Lat {feature.get('lat', 0):.2f}, Lon {feature.get('lon', 0):.2f}",
-                                style={"fontSize": "0.9rem", "opacity": 0.8},
-                            ),
-                            html.Span(
-                                f"Observed: {feature.get('time', 'N/A')} - {feature.get('dataset', 'Dataset')}",
-                                style={"fontSize": "0.8rem", "opacity": 0.7},
-                            ),
-                            html.Span(feature.get("notes", ""), style={"fontSize": "0.8rem"}),
+            html.Div(
+                [
+                    html.Strong(feature.get("name", "Feature")),
+                    html.Span(
+                        f"Lat {feature.get('lat', 0):.2f}, Lon {feature.get('lon', 0):.2f}",
+                        style={"fontSize": "0.9rem", "opacity": 0.8},
+                    ),
+                    html.Span(
+                        f"Observed: {feature.get('time', 'N/A')} - {feature.get('dataset', 'Dataset')}",
+                        style={"fontSize": "0.8rem", "opacity": 0.7},
+                    ),
+                    html.Span(feature.get("notes", ""), style={"fontSize": "0.8rem"}),
                         ]
                     ),
                     html.Div(

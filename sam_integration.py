@@ -29,14 +29,27 @@ def initialize_sam_model():
         return False
     
     try:
-        # Check if model files exist, if not download them
+        # SAM model configuration - change these to use different models
+        # Available models: "vit_b", "vit_l", "vit_h"
         model_type = "vit_b"  # Use the smaller model for faster loading
         sam_checkpoint = "sam_vit_b_01ec64.pth"
         
-        # For now, we'll use a placeholder until the model is downloaded
-        # In production, you'd want to download the checkpoint file
+        # Alternative model configurations (uncomment to use):
+        # model_type = "vit_l"
+        # sam_checkpoint = "sam_vit_l_0b3195.pth"
+        
+        # model_type = "vit_h" 
+        # sam_checkpoint = "sam_vit_h_4b8939.pth"
+        
         if not os.path.exists(sam_checkpoint):
-            print(f"SAM checkpoint {sam_checkpoint} not found. Please download it.")
+            print(f"SAM checkpoint {sam_checkpoint} not found.")
+            print(f"Please download it using:")
+            if model_type == "vit_b":
+                print("wget https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth")
+            elif model_type == "vit_l":
+                print("wget https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth")
+            elif model_type == "vit_h":
+                print("wget https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth")
             return False
         
         device = "cuda" if torch.cuda.is_available() else "cpu"
