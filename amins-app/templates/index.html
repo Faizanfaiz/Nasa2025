@@ -1,0 +1,662 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NASA Dataset Explorer</title>
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    
+    <!-- OpenSeadragon for high-res image viewing -->
+    <script src="https://cdn.jsdelivr.net/npm/openseadragon@4.1.0/build/openseadragon/openseadragon.min.js"></script>
+    
+    <!-- Annotorious for annotations -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@recogito/annotorious@2.7.0/dist/annotorious.min.css" />
+    <script src="https://cdn.jsdelivr.net/npm/@recogito/annotorious@2.7.0/dist/annotorious.min.js"></script>
+    
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    
+    <style>
+        body { margin: 0; padding: 0; font-family: Arial, sans-serif; }
+        #map { height: 100vh; width: 100%; }
+        .control-panel { 
+            position: absolute; 
+            top: 10px; 
+            left: 10px; 
+            background: white; 
+            padding: 15px; 
+            border-radius: 5px; 
+            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+            z-index: 1000;
+            max-width: 300px;
+        }
+        .dataset-selector { margin-bottom: 10px; }
+        .annotation-tools { margin-top: 10px; }
+        .tool-btn { 
+            margin: 5px; 
+            padding: 8px 12px; 
+            border: none; 
+            background: #007cba; 
+            color: white; 
+            border-radius: 3px; 
+            cursor: pointer;
+        }
+        .tool-btn:hover { background: #005a87; }
+        .tool-btn.active { background: #ff6b35; }
+    </style>
+</head>
+<body>
+    <div class="control-panel">
+        <h3>NASA Dataset Explorer</h3>
+        <div class="dataset-selector">
+            <label>Select Dataset:</label>
+            <select id="datasetSelect">
+                <option value="earth_landsat">Earth - Landsat 8 Satellite</option>
+                <option value="mars_simulation">Mars - Surface Simulation</option>
+                <option value="moon_simulation">Moon - Surface Simulation</option>
+                <option value="space_simulation">Deep Space - Galaxy Field</option>
+                <option value="img_upload">📁 Upload .IMG File</option>
+            </select>
+        </div>
+        <div class="annotation-tools">
+            <h4>Tools:</h4>
+            <button class="tool-btn" id="pointTool">📍 Point</button>
+            <button class="tool-btn" id="polygonTool">🔺 Polygon</button>
+            <button class="tool-btn" id="measureTool">📏 Measure</button>
+            <button class="tool-btn" id="compareTool">🔄 Compare</button>
+            <button class="tool-btn" id="clearTool" style="background: #e74c3c;">🗑️ Clear All</button>
+        </div>
+        <div id="annotationInfo" style="margin-top: 10px; font-size: 12px; color: #666;"></div>
+        <div id="demoInfo" style="margin-top: 10px; padding: 10px; background: #f8f9fa; border-radius: 4px; font-size: 11px; color: #495057;">
+            <strong>NASA Space Apps Demo:</strong><br>
+            • Click 🔍 markers to explore NASA features<br>
+            • Use tools to annotate and measure<br>
+            • Switch datasets to compare different NASA missions<br>
+            • Discover patterns in massive image datasets<br>
+            <a href="/img_viewer" style="color: #3498db; text-decoration: none;">📁 View .IMG files →</a><br>
+            <a href="/openseadragon_viewer" style="color: #9b59b6; text-decoration: none;">🔍 Deep Zoom Viewer →</a>
+        </div>
+        
+        <div id="imgUploadArea" style="display: none; margin-top: 10px; padding: 15px; background: #e8f4fd; border-radius: 4px; border: 2px dashed #3498db;">
+            <h4 style="margin: 0 0 10px 0; color: #2980b9;">Upload NASA .IMG File</h4>
+            <input type="file" id="imgFileInput" accept=".img" style="margin-bottom: 10px;">
+            <br>
+            <button class="btn" onclick="uploadImgToMap()" style="background: #3498db;">Upload & View on Map</button>
+            <button class="btn" onclick="window.open('/img_viewer', '_blank')" style="background: #e67e22;">Open .IMG Viewer</button>
+        </div>
+    </div>
+    
+    <div id="map"></div>
+    
+    <!-- Leaflet JavaScript -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
+    <script>
+        // NASA Dataset Explorer
+        class NASADatasetExplorer {
+            constructor() {
+                this.map = null;
+                this.currentDataset = null;
+                this.annotations = [];
+                this.activeTool = null;
+                this.annotationLayer = null;
+                this.polygonPoints = [];
+                this.measurementPoints = [];
+                this.currentPolygon = null;
+                this.currentMeasurement = null;
+                
+                this.datasets = {
+                    earth_landsat: {
+                        name: "Earth - Landsat 8 Satellite",
+                        center: [39.8283, -98.5795],
+                        zoom: 4,
+                        tileUrl: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+                        attribution: "NASA Landsat 8 - 30m resolution",
+                        description: "Multi-spectral satellite imagery showing Earth's surface features, vegetation, and geological formations."
+                    },
+                    mars_simulation: {
+                        name: "Mars - Surface Simulation",
+                        center: [0, 0],
+                        zoom: 2,
+                        tileUrl: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+                        attribution: "Mars Surface Simulation - NASA Data",
+                        description: "Simulated Mars surface based on NASA Mars Global Surveyor data showing craters, canyons, and polar ice caps.",
+                        isMars: true
+                    },
+                    moon_simulation: {
+                        name: "Moon - Surface Simulation",
+                        center: [0, 0],
+                        zoom: 2,
+                        tileUrl: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+                        attribution: "Lunar Surface Simulation - NASA LRO Data",
+                        description: "Simulated lunar surface based on NASA LRO data showing craters, maria, and highland regions.",
+                        isMoon: true
+                    },
+                    space_simulation: {
+                        name: "Deep Space - Galaxy Field",
+                        center: [0, 0],
+                        zoom: 1,
+                        tileUrl: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+                        attribution: "Deep Space Simulation - Hubble Data",
+                        description: "Simulated deep space field based on Hubble Deep Field observations showing galaxies and cosmic structures.",
+                        isSpace: true
+                    },
+                    img_upload: {
+                        name: "Upload .IMG File",
+                        center: [0, 0],
+                        zoom: 2,
+                        tileUrl: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+                        attribution: "Upload your own NASA .IMG file",
+                        description: "Upload and view your own NASA .IMG files from planetary missions.",
+                        isUpload: true
+                    }
+                };
+                
+                this.init();
+            }
+            
+            init() {
+                // Initialize map
+                this.map = L.map('map').setView([39.8283, -98.5795], 4);
+                
+                // Add initial dataset
+                this.loadDataset('earth_landsat');
+                
+                // Setup event listeners
+                this.setupEventListeners();
+                
+                // Initialize annotation layer
+                this.annotationLayer = L.layerGroup().addTo(this.map);
+                
+                // Add sample NASA features for demonstration
+                this.addSampleFeatures();
+                
+                console.log("NASA Dataset Explorer initialized!");
+            }
+            
+            setupEventListeners() {
+                // Dataset selector
+                document.getElementById('datasetSelect').addEventListener('change', (e) => {
+                    this.loadDataset(e.target.value);
+                });
+                
+                // Tool buttons
+                document.getElementById('pointTool').addEventListener('click', () => {
+                    this.setActiveTool('point');
+                });
+                
+                document.getElementById('polygonTool').addEventListener('click', () => {
+                    this.setActiveTool('polygon');
+                });
+                
+                document.getElementById('measureTool').addEventListener('click', () => {
+                    this.setActiveTool('measure');
+                });
+                
+                document.getElementById('compareTool').addEventListener('click', () => {
+                    this.setActiveTool('compare');
+                });
+                
+                document.getElementById('clearTool').addEventListener('click', () => {
+                    this.clearAllAnnotations();
+                });
+            }
+            
+            loadDataset(datasetId) {
+                const dataset = this.datasets[datasetId];
+                if (!dataset) return;
+                
+                // Show/hide upload area based on dataset
+                const uploadArea = document.getElementById('imgUploadArea');
+                if (datasetId === 'img_upload') {
+                    uploadArea.style.display = 'block';
+                } else {
+                    uploadArea.style.display = 'none';
+                }
+                
+                // Clear existing layers
+                this.map.eachLayer((layer) => {
+                    if (layer instanceof L.TileLayer || layer instanceof L.ImageOverlay) {
+                        this.map.removeLayer(layer);
+                    }
+                });
+                
+                // Add base tile layer for all datasets
+                const tileLayer = L.tileLayer(dataset.tileUrl, {
+                    attribution: dataset.attribution,
+                    maxZoom: 18
+                }).addTo(this.map);
+                
+                // Apply visual styling based on dataset type
+                this.applyDatasetStyling(datasetId);
+                
+                // Update map view
+                this.map.setView(dataset.center, dataset.zoom);
+                
+                this.currentDataset = datasetId;
+                this.updateInfo(`${dataset.name} - ${dataset.description}`);
+            }
+            
+            applyDatasetStyling(datasetId) {
+                // Remove existing styling
+                document.body.classList.remove('mars-theme', 'moon-theme', 'space-theme');
+                
+                // Apply theme-specific styling
+                switch(datasetId) {
+                    case 'mars_simulation':
+                        document.body.classList.add('mars-theme');
+                        this.updateInfo('Mars theme applied - Red/orange surface simulation based on NASA data');
+                        break;
+                    case 'moon_simulation':
+                        document.body.classList.add('moon-theme');
+                        this.updateInfo('Moon theme applied - Gray surface simulation based on NASA LRO data');
+                        break;
+                    case 'space_simulation':
+                        document.body.classList.add('space-theme');
+                        this.updateInfo('Space theme applied - Dark star field simulation based on Hubble data');
+                        break;
+                    default:
+                        this.updateInfo('Earth theme - Standard NASA Landsat 8 satellite imagery');
+                }
+            }
+            
+            setActiveTool(tool) {
+                // Remove active class from all tools
+                document.querySelectorAll('.tool-btn').forEach(btn => {
+                    btn.classList.remove('active');
+                });
+                
+                // Add active class to selected tool
+                document.getElementById(tool + 'Tool').classList.add('active');
+                
+                this.activeTool = tool;
+                this.updateInfo(`Active tool: ${tool}`);
+                
+                // Setup tool-specific behavior
+                this.setupToolBehavior(tool);
+            }
+            
+            setupToolBehavior(tool) {
+                // Remove existing click handlers
+                this.map.off('click');
+                
+                // Clear previous tool state
+                this.clearToolState();
+                
+                switch(tool) {
+                    case 'point':
+                        this.map.on('click', (e) => {
+                            this.addPointAnnotation(e.latlng);
+                        });
+                        break;
+                        
+                    case 'polygon':
+                        this.map.on('click', (e) => {
+                            this.addPolygonPoint(e.latlng);
+                        });
+                        break;
+                        
+                    case 'measure':
+                        this.map.on('click', (e) => {
+                            this.addMeasurementPoint(e.latlng);
+                        });
+                        break;
+                        
+                    case 'compare':
+                        this.showComparisonDialog();
+                        break;
+                }
+            }
+            
+            clearToolState() {
+                // Clear polygon state
+                this.polygonPoints = [];
+                if (this.currentPolygon) {
+                    this.annotationLayer.removeLayer(this.currentPolygon);
+                    this.currentPolygon = null;
+                }
+                
+                // Clear measurement state
+                this.measurementPoints = [];
+                if (this.currentMeasurement) {
+                    this.annotationLayer.removeLayer(this.currentMeasurement);
+                    this.currentMeasurement = null;
+                }
+            }
+            
+            addPointAnnotation(latlng) {
+                const marker = L.marker(latlng, {
+                    icon: L.divIcon({
+                        className: 'custom-marker',
+                        html: '📍',
+                        iconSize: [30, 30]
+                    })
+                }).addTo(this.annotationLayer);
+                
+                // Add popup with annotation form
+                marker.bindPopup(`
+                    <div>
+                        <h4>Add Annotation</h4>
+                        <input type="text" id="annotationText" placeholder="Enter description..." style="width: 200px; margin: 5px 0;">
+                        <br>
+                        <button onclick="this.addAnnotation('${latlng.lat}', '${latlng.lng}')">Save</button>
+                    </div>
+                `).openPopup();
+                
+                this.annotations.push({
+                    type: 'point',
+                    latlng: latlng,
+                    marker: marker
+                });
+            }
+            
+            addPolygonPoint(latlng) {
+                this.polygonPoints.push(latlng);
+                
+                // Add marker for the point
+                const marker = L.marker(latlng, {
+                    icon: L.divIcon({
+                        className: 'custom-marker',
+                        html: '●',
+                        iconSize: [12, 12]
+                    })
+                }).addTo(this.annotationLayer);
+                
+                // If we have at least 2 points, draw/update the polygon
+                if (this.polygonPoints.length >= 2) {
+                    if (this.currentPolygon) {
+                        this.annotationLayer.removeLayer(this.currentPolygon);
+                    }
+                    
+                    this.currentPolygon = L.polygon(this.polygonPoints, {
+                        color: '#ff6b35',
+                        weight: 2,
+                        fillColor: '#ff6b35',
+                        fillOpacity: 0.2
+                    }).addTo(this.annotationLayer);
+                }
+                
+                this.updateInfo(`Polygon point ${this.polygonPoints.length} added at ${latlng.lat.toFixed(4)}, ${latlng.lng.toFixed(4)}`);
+            }
+            
+            addMeasurementPoint(latlng) {
+                this.measurementPoints.push(latlng);
+                
+                // Add marker for the point
+                const marker = L.marker(latlng, {
+                    icon: L.divIcon({
+                        className: 'custom-marker',
+                        html: '📏',
+                        iconSize: [20, 20]
+                    })
+                }).addTo(this.annotationLayer);
+                
+                // If we have 2 points, draw the line and calculate distance
+                if (this.measurementPoints.length === 2) {
+                    if (this.currentMeasurement) {
+                        this.annotationLayer.removeLayer(this.currentMeasurement);
+                    }
+                    
+                    const line = L.polyline(this.measurementPoints, {
+                        color: '#3498db',
+                        weight: 3,
+                        dashArray: '5, 5'
+                    }).addTo(this.annotationLayer);
+                    
+                    // Calculate distance
+                    const distance = this.map.distance(this.measurementPoints[0], this.measurementPoints[1]);
+                    const distanceKm = (distance / 1000).toFixed(2);
+                    
+                    // Add distance label at midpoint
+                    const midpoint = this.getMidpoint(this.measurementPoints[0], this.measurementPoints[1]);
+                    const label = L.marker(midpoint, {
+                        icon: L.divIcon({
+                            className: 'measurement-label',
+                            html: `${distanceKm} km`,
+                            iconSize: [80, 20]
+                        })
+                    }).addTo(this.annotationLayer);
+                    
+                    this.currentMeasurement = L.layerGroup([line, label]);
+                    this.updateInfo(`Distance: ${distanceKm} km`);
+                    
+                    // Reset for next measurement
+                    this.measurementPoints = [];
+                } else {
+                    this.updateInfo(`Measurement point ${this.measurementPoints.length} at ${latlng.lat.toFixed(4)}, ${latlng.lng.toFixed(4)}`);
+                }
+            }
+            
+            getMidpoint(lat1, lng1, lat2, lng2) {
+                return {
+                    lat: (lat1.lat + lat2.lat) / 2,
+                    lng: (lat1.lng + lat2.lng) / 2
+                };
+            }
+            
+            showComparisonDialog() {
+                // Implementation for dataset comparison
+                alert('Comparison feature coming soon! This will allow side-by-side viewing of different datasets.');
+            }
+            
+            clearAllAnnotations() {
+                // Clear all annotations from the map
+                this.annotationLayer.clearLayers();
+                
+                // Reset all state
+                this.annotations = [];
+                this.polygonPoints = [];
+                this.measurementPoints = [];
+                this.currentPolygon = null;
+                this.currentMeasurement = null;
+                
+                // Remove active tool
+                document.querySelectorAll('.tool-btn').forEach(btn => {
+                    btn.classList.remove('active');
+                });
+                this.activeTool = null;
+                
+                // Remove click handlers
+                this.map.off('click');
+                
+                this.updateInfo('All annotations cleared');
+            }
+            
+            addSampleFeatures() {
+                // Sample Earth features
+                const earthFeatures = [
+                    {
+                        lat: 36.1699, lng: -115.1398,
+                        name: "Las Vegas, Nevada",
+                        type: "Urban Area",
+                        description: "Major metropolitan area visible in Landsat imagery"
+                    },
+                    {
+                        lat: 36.1069, lng: -112.1129,
+                        name: "Grand Canyon",
+                        type: "Geological Feature",
+                        description: "Famous canyon system visible in satellite imagery"
+                    },
+                    {
+                        lat: 25.7617, lng: -80.1918,
+                        name: "Miami, Florida",
+                        type: "Coastal City",
+                        description: "Coastal urban area with visible water features"
+                    }
+                ];
+                
+                // Sample Mars features
+                const marsFeatures = [
+                    {
+                        lat: 18.65, lng: -133.8,
+                        name: "Olympus Mons",
+                        type: "Volcano",
+                        description: "Largest volcano in the solar system - 22km high"
+                    },
+                    {
+                        lat: -7, lng: -70,
+                        name: "Valles Marineris",
+                        type: "Canyon System",
+                        description: "Massive canyon system - 4000km long, 7km deep"
+                    },
+                    {
+                        lat: 0, lng: 0,
+                        name: "Tharsis Region",
+                        type: "Volcanic Plateau",
+                        description: "Large volcanic region with multiple shield volcanoes"
+                    }
+                ];
+                
+                // Sample Moon features
+                const moonFeatures = [
+                    {
+                        lat: 0, lng: 0,
+                        name: "Mare Tranquillitatis",
+                        type: "Lunar Mare",
+                        description: "Sea of Tranquility - Apollo 11 landing site"
+                    },
+                    {
+                        lat: 8.5, lng: 31.4,
+                        name: "Tycho Crater",
+                        type: "Impact Crater",
+                        description: "Prominent impact crater with ray system"
+                    }
+                ];
+                
+                // Add Earth features
+                earthFeatures.forEach(feature => {
+                    const marker = L.marker([feature.lat, feature.lng], {
+                        icon: L.divIcon({
+                            className: 'nasa-feature-marker',
+                            html: '🌍',
+                            iconSize: [25, 25]
+                        })
+                    }).addTo(this.annotationLayer);
+                    
+                    marker.bindPopup(`
+                        <div style="min-width: 200px;">
+                            <h4>${feature.name}</h4>
+                            <p><strong>Type:</strong> ${feature.type}</p>
+                            <p>${feature.description}</p>
+                            <small>Earth - NASA Landsat 8</small>
+                        </div>
+                    `);
+                });
+                
+                // Add Mars features
+                marsFeatures.forEach(feature => {
+                    const marker = L.marker([feature.lat, feature.lng], {
+                        icon: L.divIcon({
+                            className: 'nasa-feature-marker',
+                            html: '🔴',
+                            iconSize: [25, 25]
+                        })
+                    }).addTo(this.annotationLayer);
+                    
+                    marker.bindPopup(`
+                        <div style="min-width: 200px;">
+                            <h4>${feature.name}</h4>
+                            <p><strong>Type:</strong> ${feature.type}</p>
+                            <p>${feature.description}</p>
+                            <small>Mars - NASA Mars Global Surveyor</small>
+                        </div>
+                    `);
+                });
+                
+                // Add Moon features
+                moonFeatures.forEach(feature => {
+                    const marker = L.marker([feature.lat, feature.lng], {
+                        icon: L.divIcon({
+                            className: 'nasa-feature-marker',
+                            html: '🌙',
+                            iconSize: [25, 25]
+                        })
+                    }).addTo(this.annotationLayer);
+                    
+                    marker.bindPopup(`
+                        <div style="min-width: 200px;">
+                            <h4>${feature.name}</h4>
+                            <p><strong>Type:</strong> ${feature.type}</p>
+                            <p>${feature.description}</p>
+                            <small>Moon - NASA LRO</small>
+                        </div>
+                    `);
+                });
+            }
+            
+            updateInfo(message) {
+                document.getElementById('annotationInfo').textContent = message;
+            }
+        }
+        
+        // Global function for .img upload
+        function uploadImgToMap() {
+            const fileInput = document.getElementById('imgFileInput');
+            const file = fileInput.files[0];
+            
+            if (!file) {
+                alert('Please select a .img file first');
+                return;
+            }
+            
+            if (!file.name.toLowerCase().endsWith('.img')) {
+                alert('Please select a .img file');
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            fetch('/upload_img', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success && data.image_data) {
+                    // Add the .img file as an image overlay on the map
+                    const imageBounds = [[-90, -180], [90, 180]]; // Full world bounds
+                    const imageLayer = L.imageOverlay(data.image_data, imageBounds, {
+                        attribution: `NASA .IMG File: ${data.filename}`,
+                        opacity: 0.8
+                    }).addTo(window.explorer.map);
+                    
+                    // Add a marker to show the file info
+                    const marker = L.marker([0, 0], {
+                        icon: L.divIcon({
+                            className: 'nasa-feature-marker',
+                            html: '📁',
+                            iconSize: [30, 30]
+                        })
+                    }).addTo(window.explorer.annotationLayer);
+                    
+                    marker.bindPopup(`
+                        <div style="min-width: 200px;">
+                            <h4>${data.filename}</h4>
+                            <p><strong>Dimensions:</strong> ${data.width} × ${data.height} pixels</p>
+                            <p><strong>Format:</strong> ${data.format}</p>
+                            <p>NASA .IMG file loaded successfully!</p>
+                        </div>
+                    `).openPopup();
+                    
+                    window.explorer.updateInfo(`Loaded .IMG file: ${data.filename} (${data.width}×${data.height})`);
+                } else {
+                    alert('Error loading .img file: ' + (data.message || data.error));
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Error uploading file: ' + error.message);
+            });
+        }
+        
+        // Initialize the explorer when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            window.explorer = new NASADatasetExplorer();
+        });
+    </script>
+</body>
+</html>
+

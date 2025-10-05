@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NASA Image Deep Zoom Viewer</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src="https://cdn.jsdelivr.net/npm/openseadragon@4.1.0/build/openseadragon/openseadragon.min.js"></script>
+    <style>
+        .viewer-container {
+            display: flex;
+            height: 100vh;
+        }
+        
+        .control-panel {
+            width: 300px;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 20px;
+            border-right: 2px solid #ddd;
+            overflow-y: auto;
+        }
+        
+        .viewer-area {
+            flex: 1;
+            position: relative;
+            background: #f0f0f0;
+        }
+        
+        .upload-area {
+            border: 2px dashed #3498db;
+            border-radius: 8px;
+            padding: 30px 20px;
+            text-align: center;
+            margin-bottom: 20px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .upload-area:hover {
+            border-color: #2980b9;
+            background: #f8f9fa;
+        }
+        
+        .upload-area.dragover {
+            border-color: #27ae60;
+            background: #e8f5e8;
+        }
+        
+        .file-info {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 20px;
+            font-size: 14px;
+        }
+        
+        .btn {
+            background: #3498db;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 2px;
+            font-size: 12px;
+        }
+        
+        .btn:hover {
+            background: #2980b9;
+        }
+        
+        .btn-success {
+            background: #27ae60;
+        }
+        
+        .btn-success:hover {
+            background: #229954;
+        }
+        
+        .btn-warning {
+            background: #f39c12;
+        }
+        
+        .btn-warning:hover {
+            background: #e67e22;
+        }
+        
+        #openseadragon {
+            width: 100%;
+            height: 100%;
+        }
+        
+        .viewer-controls {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(255, 255, 255, 0.9);
+            padding: 10px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            z-index: 1000;
+        }
+        
+        .sample-images {
+            margin-top: 20px;
+        }
+        
+        .sample-image {
+            display: block;
+            width: 100%;
+            margin: 5px 0;
+            padding: 8px;
+            background: #f8f9fa;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            text-decoration: none;
+            color: #333;
+            font-size: 12px;
+        }
+        
+        .sample-image:hover {
+            background: #e9ecef;
+        }
+    </style>
+</head>
+<body>
+    <div class="viewer-container">
+        <div class="control-panel">
+            <h3>NASA Deep Zoom Viewer</h3>
+            <p>Upload high-resolution NASA images for deep zoom exploration</p>
+            
+            <div class="upload-area" id="uploadArea">
+                <div>
+                    <h4>📁 Drop PNG/JPG file here</h4>
+                    <p>or click to browse</p>
+                    <input type="file" id="fileInput" accept=".png,.jpg,.jpeg,.tiff,.tif" style="display: none;">
+                </div>
+            </div>
+            
+            <div class="file-info" id="fileInfo" style="display: none;">
+                <h4>File Information</h4>
+                <div id="fileDetails"></div>
+            </div>
+            
+            <div class="sample-images">
+                <h4>Sample NASA Images</h4>
+                <p style="font-size: 11px; color: #666;">Try these sample images to test the viewer:</p>
+                <a href="#" class="sample-image" onclick="loadSampleImage('mars_sample')">🔴 Mars Surface Sample</a>
+                <a href="#" class="sample-image" onclick="loadSampleImage('moon_sample')">🌙 Moon Surface Sample</a>
+                <a href="#" class="sample-image" onclick="loadSampleImage('earth_sample')">🌍 Earth Satellite Sample</a>
+            </div>
+            
+            <div style="margin-top: 20px;">
+                <a href="/" class="btn">← Back to Main Explorer</a>
+                <a href="/img_viewer" class="btn btn-warning">📁 .IMG File Viewer</a>
+            </div>
+        </div>
+        
+        <div class="viewer-area">
+            <div id="openseadragon"></div>
+            
+            <div class="viewer-controls" id="viewerControls" style="display: none;">
+                <button class="btn" onclick="resetView()">🏠 Reset View</button>
+                <button class="btn" onclick="fitToWindow()">📐 Fit to Window</button>
+                <button class="btn" onclick="toggleFullscreen()">⛶ Fullscreen</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let viewer = null;
+        let currentImage = null;
+        
+        // File upload handling
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const fileInfo = document.getElementById('fileInfo');
+        const fileDetails = document.getElementById('fileDetails');
+        const viewerControls = document.getElementById('viewerControls');
+        
+        uploadArea.addEventListener('click', () => fileInput.click());
+        
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+        
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+        
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                handleFile(files[0]);
+            }
+        });
+        
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleFile(e.target.files[0]);
+            }
+        });
+        
+        function handleFile(file) {
+            if (!file.type.startsWith('image/')) {
+                alert('Please select an image file (PNG, JPG, TIFF)');
+                return;
+            }
+            
+            // Always use server processing for better compatibility
+            processLargeImage(file);
+        }
+        
+        function processLargeImage(file) {
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            // Show processing message
+            const processingDiv = document.createElement('div');
+            processingDiv.innerHTML = `
+                <div style="text-align: center; color: #666; padding: 50px;">
+                    <h3>🔄 Processing Large Image</h3>
+                    <p>Optimizing image for viewing...</p>
+                    <p style="font-size: 12px;">This may take a moment for very large images</p>
+                </div>
+            `;
+            document.getElementById('openseadragon').innerHTML = '';
+            document.getElementById('openseadragon').appendChild(processingDiv);
+            
+            fetch('/process_large_image', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    loadImage(data.image_url, data.filename);
+                    if (data.scaled) {
+                        updateFileInfo(data.filename, {x: data.width, y: data.height}, 
+                                     `Scaled from ${data.original_width}×${data.original_height} to ${data.width}×${data.height}`);
+                    }
+                } else {
+                    alert('Error processing image: ' + data.error);
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Error processing image: ' + error.message);
+            });
+        }
+        
+        function loadImage(imageUrl, filename) {
+            if (viewer) {
+                viewer.destroy();
+            }
+            
+            // First test if the image URL is accessible
+            fetch(imageUrl)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+                    return response.blob();
+                })
+                .then(blob => {
+                    // Create object URL for the blob
+                    const objectUrl = URL.createObjectURL(blob);
+                    
+                    // Try OpenSeadragon first
+                    tryOpenSeadragon(objectUrl, filename);
+                })
+                .catch(error => {
+                    console.error('Error loading image:', error);
+                    // Fallback to simple image display
+                    fallbackToSimpleImage(imageUrl, filename);
+                });
+        }
+        
+        function tryOpenSeadragon(imageUrl, filename) {
+            try {
+                viewer = OpenSeadragon({
+                    id: "openseadragon",
+                    prefixUrl: "https://cdn.jsdelivr.net/npm/openseadragon@4.1.0/build/openseadragon/images/",
+                    tileSources: imageUrl,
+                    showNavigationControl: true,
+                    showSequenceControl: false,
+                    showFullPageControl: true,
+                    showZoomControl: true,
+                    showHomeControl: true,
+                    showRotationControl: true,
+                    showFlipControl: true,
+                    showFullPageControl: true,
+                    showSequenceControl: false,
+                    sequenceMode: false,
+                    autoHideControls: true,
+                    immediateRender: false,
+                    wrapHorizontal: false,
+                    wrapVertical: false,
+                    wrapOverlays: false,
+                    constrainDuringPan: true,
+                    defaultZoomLevel: 0,
+                    minZoomLevel: 0,
+                    maxZoomLevel: 10,
+                    visibilityRatio: 0.1,
+                    imageLoaderLimit: 5,
+                    clickTimeThreshold: 300,
+                    clickDistThreshold: 5,
+                    dblClickTimeThreshold: 300,
+                    dblClickDistThreshold: 20,
+                    // Disable problematic features that cause canvas issues
+                    preserveImageSizeOnResize: false,
+                    preserveViewport: false,
+                    preserveOverlays: false,
+                    // Memory management
+                    maxImageCacheCount: 50,
+                    timeout: 30000,
+                    loadTilesWithAjax: false,
+                    ajaxWithCredentials: false,
+                    // Force simple image loading
+                    imageLoaderLimit: 1,
+                    gestureSettingsMouse: {
+                        clickToZoom: true,
+                        dblClickToZoom: true,
+                        pinchToZoom: true,
+                        flickEnabled: true,
+                        flickMinSpeed: 120,
+                        flickMomentum: 0.25,
+                        pinchRotate: false
+                    },
+                    gestureSettingsTouch: {
+                        clickToZoom: true,
+                        dblClickToZoom: true,
+                        pinchToZoom: true,
+                        flickEnabled: true,
+                        flickMinSpeed: 120,
+                        flickMomentum: 0.25,
+                        pinchRotate: false
+                    }
+                });
+            
+                viewer.addHandler('open', function() {
+                    viewerControls.style.display = 'block';
+                    updateFileInfo(filename, viewer.world.getItemAt(0).getContentSize());
+                });
+                
+                viewer.addHandler('tile-load-failed', function(event) {
+                    console.error('Tile load failed:', event);
+                    // Fallback to simple image display
+                    fallbackToSimpleImage(imageUrl, filename);
+                });
+                
+                viewer.addHandler('error', function(event) {
+                    console.error('OpenSeadragon error:', event);
+                    // Fallback to simple image display
+                    fallbackToSimpleImage(imageUrl, filename);
+                });
+                
+                currentImage = filename;
+                
+            } catch (error) {
+                console.error('Error initializing OpenSeadragon:', error);
+                // Fallback to simple image display
+                fallbackToSimpleImage(imageUrl, filename);
+            }
+        }
+        
+        function fallbackToSimpleImage(imageUrl, filename) {
+            console.log('Falling back to simple image display');
+            
+            // Destroy OpenSeadragon viewer
+            if (viewer) {
+                viewer.destroy();
+                viewer = null;
+            }
+            
+            // Create simple image display
+            const container = document.getElementById('openseadragon');
+            container.innerHTML = `
+                <div style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: #f0f0f0;">
+                    <div style="text-align: center; max-width: 90%; max-height: 90%;">
+                        <img src="${imageUrl}" style="max-width: 100%; max-height: 100%; object-fit: contain; border: 2px solid #ddd; border-radius: 8px;" 
+                             onload="updateFileInfo('${filename}', {x: this.naturalWidth, y: this.naturalHeight}, 'Simple image display (OpenSeadragon fallback)')"
+                             onerror="alert('Failed to load image even with fallback method')">
+                        <div style="margin-top: 10px; color: #666; font-size: 12px;">
+                            <p>Simple image display (OpenSeadragon fallback)</p>
+                            <p>Use browser zoom (Ctrl+/-) to zoom in/out</p>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            viewerControls.style.display = 'block';
+        }
+        
+        function loadSampleImage(type) {
+            let sampleUrl;
+            let filename;
+            
+            switch(type) {
+                case 'mars_sample':
+                    sampleUrl = 'https://mars.nasa.gov/system/resources/detail_files/26262_PIA16225_hires.jpg';
+                    filename = 'Mars Surface Sample';
+                    break;
+                case 'moon_sample':
+                    sampleUrl = 'https://www.nasa.gov/sites/default/files/thumbnails/image/lro_global_mosaic_1024.jpg';
+                    filename = 'Moon Surface Sample';
+                    break;
+                case 'earth_sample':
+                    sampleUrl = 'https://eoimages.gsfc.nasa.gov/images/imagerecords/73000/73909/world.topo.bathy.200412.3x5400x2700.jpg';
+                    filename = 'Earth Satellite Sample';
+                    break;
+            }
+            
+            loadImage(sampleUrl, filename);
+        }
+        
+        function updateFileInfo(filename, dimensions, extraInfo = '') {
+            fileInfo.style.display = 'block';
+            fileDetails.innerHTML = `
+                <p><strong>Filename:</strong> ${filename}</p>
+                <p><strong>Dimensions:</strong> ${Math.round(dimensions.x)} × ${Math.round(dimensions.y)} pixels</p>
+                <p><strong>Status:</strong> Loaded in OpenSeadragon</p>
+                <p><strong>Zoom:</strong> Use mouse wheel or controls to zoom</p>
+                ${extraInfo ? `<p><strong>Note:</strong> ${extraInfo}</p>` : ''}
+            `;
+        }
+        
+        function resetView() {
+            if (viewer) {
+                viewer.viewport.goHome();
+            }
+        }
+        
+        function fitToWindow() {
+            if (viewer) {
+                viewer.viewport.fitBounds(viewer.viewport.getBounds());
+            }
+        }
+        
+        function toggleFullscreen() {
+            if (viewer) {
+                if (viewer.isFullScreen()) {
+                    viewer.exitFullScreen();
+                } else {
+                    viewer.enterFullScreen();
+                }
+            }
+        }
+        
+        // Initialize with a welcome message
+        document.addEventListener('DOMContentLoaded', function() {
+            const welcomeDiv = document.createElement('div');
+            welcomeDiv.innerHTML = `
+                <div style="text-align: center; color: #666; padding: 50px;">
+                    <h3>🛰️ NASA Deep Zoom Viewer</h3>
+                    <p>Upload a high-resolution NASA image to begin exploring</p>
+                    <p style="font-size: 12px;">Supports PNG, JPG, TIFF formats</p>
+                </div>
+            `;
+            document.getElementById('openseadragon').appendChild(welcomeDiv);
+        });
+    </script>
+</body>
+</html>

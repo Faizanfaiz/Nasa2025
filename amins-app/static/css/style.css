@@ -1,0 +1,189 @@
+/* NASA Dataset Explorer Styles */
+html, body {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+#map {
+    height: 100vh;
+    width: 100%;
+}
+
+.control-panel {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    background: rgba(255, 255, 255, 0.95);
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    z-index: 1000;
+    max-width: 320px;
+    backdrop-filter: blur(10px);
+}
+
+.control-panel h3 {
+    margin: 0 0 15px 0;
+    color: #2c3e50;
+    font-size: 18px;
+    border-bottom: 2px solid #3498db;
+    padding-bottom: 8px;
+}
+
+.dataset-selector {
+    margin-bottom: 15px;
+}
+
+.dataset-selector label {
+    display: block;
+    margin-bottom: 5px;
+    font-weight: 600;
+    color: #34495e;
+}
+
+.dataset-selector select {
+    width: 100%;
+    padding: 8px 12px;
+    border: 2px solid #bdc3c7;
+    border-radius: 4px;
+    background: white;
+    font-size: 14px;
+    cursor: pointer;
+}
+
+.dataset-selector select:focus {
+    border-color: #3498db;
+    outline: none;
+}
+
+.annotation-tools h4 {
+    margin: 15px 0 10px 0;
+    color: #2c3e50;
+    font-size: 14px;
+}
+
+.tool-btn {
+    margin: 3px;
+    padding: 8px 12px;
+    border: none;
+    background: #3498db;
+    color: white;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    transition: all 0.3s ease;
+    display: inline-block;
+}
+
+.tool-btn:hover {
+    background: #2980b9;
+    transform: translateY(-1px);
+}
+
+.tool-btn.active {
+    background: #e74c3c;
+    box-shadow: 0 2px 8px rgba(231, 76, 60, 0.3);
+}
+
+#annotationInfo {
+    margin-top: 15px;
+    font-size: 12px;
+    color: #7f8c8d;
+    background: #ecf0f1;
+    padding: 8px;
+    border-radius: 4px;
+    border-left: 3px solid #3498db;
+}
+
+.custom-marker {
+    background: none !important;
+    border: none !important;
+    font-size: 20px;
+}
+
+.measurement-label {
+    background: rgba(52, 152, 219, 0.8) !important;
+    color: white !important;
+    border: 2px solid white !important;
+    border-radius: 4px !important;
+    font-size: 12px !important;
+    font-weight: bold !important;
+    text-align: center !important;
+    line-height: 16px !important;
+}
+
+.nasa-feature-marker {
+    background: none !important;
+    border: none !important;
+    font-size: 25px !important;
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.1); }
+    100% { transform: scale(1); }
+}
+
+/* Theme-specific styling */
+.mars-theme #map {
+    filter: hue-rotate(20deg) saturate(1.5) contrast(1.2);
+    background: linear-gradient(45deg, #8B4513, #CD853F, #A0522D);
+}
+
+.moon-theme #map {
+    filter: grayscale(0.8) contrast(1.3) brightness(1.1);
+    background: linear-gradient(45deg, #696969, #A9A9A9, #C0C0C0);
+}
+
+.space-theme #map {
+    filter: brightness(0.3) contrast(2) hue-rotate(200deg);
+    background: linear-gradient(45deg, #000033, #000066, #000099);
+}
+
+.space-theme .control-panel {
+    background: rgba(0, 0, 51, 0.9);
+    color: white;
+}
+
+.space-theme .control-panel h3 {
+    color: #87CEEB;
+    border-bottom-color: #87CEEB;
+}
+
+.space-theme .control-panel h4 {
+    color: #87CEEB;
+}
+
+.space-theme .dataset-selector label {
+    color: #E0E0E0;
+}
+
+.space-theme .dataset-selector select {
+    background: #1a1a2e;
+    color: white;
+    border-color: #87CEEB;
+}
+
+.space-theme #annotationInfo {
+    background: rgba(135, 206, 235, 0.1);
+    color: #87CEEB;
+    border-left-color: #87CEEB;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+    .control-panel {
+        max-width: 280px;
+        padding: 15px;
+    }
+    
+    .tool-btn {
+        font-size: 11px;
+        padding: 6px 10px;
+    }
+}
+

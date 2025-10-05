@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NASA .IMG File Viewer</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .img-viewer-container {
+            display: flex;
+            height: 100vh;
+        }
+        
+        .upload-panel {
+            width: 300px;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 20px;
+            border-right: 2px solid #ddd;
+            overflow-y: auto;
+        }
+        
+        .image-display {
+            flex: 1;
+            position: relative;
+            background: #f0f0f0;
+        }
+        
+        .upload-area {
+            border: 2px dashed #3498db;
+            border-radius: 8px;
+            padding: 40px 20px;
+            text-align: center;
+            margin-bottom: 20px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .upload-area:hover {
+            border-color: #2980b9;
+            background: #f8f9fa;
+        }
+        
+        .upload-area.dragover {
+            border-color: #27ae60;
+            background: #e8f5e8;
+        }
+        
+        .file-info {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 20px;
+            font-size: 14px;
+        }
+        
+        .image-container {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+        
+        .uploaded-image {
+            max-width: 100%;
+            max-height: 100%;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+        }
+        
+        .image-controls {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(255, 255, 255, 0.9);
+            padding: 10px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        .btn {
+            background: #3498db;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 2px;
+        }
+        
+        .btn:hover {
+            background: #2980b9;
+        }
+        
+        .btn-danger {
+            background: #e74c3c;
+        }
+        
+        .btn-danger:hover {
+            background: #c0392b;
+        }
+    </style>
+</head>
+<body>
+    <div class="img-viewer-container">
+        <div class="upload-panel">
+            <h3>NASA .IMG File Viewer</h3>
+            <p>Upload and view .img files from NASA missions</p>
+            
+            <div class="upload-area" id="uploadArea">
+                <div>
+                    <h4>📁 Drop .IMG file here</h4>
+                    <p>or click to browse</p>
+                    <input type="file" id="fileInput" accept=".img" style="display: none;">
+                </div>
+            </div>
+            
+            <div style="margin-top: 10px;">
+                <button class="btn" onclick="analyzeFile()" id="analyzeBtn" style="display: none;">🔍 Analyze File Structure</button>
+                <button class="btn" onclick="tryManualDimensions()" id="manualBtn" style="display: none; background: #e67e22;">🔧 Try Manual Dimensions</button>
+                <button class="btn" onclick="getGdalHelp()" id="gdalBtn" style="display: none; background: #9b59b6;">🛠️ GDAL Commands</button>
+            </div>
+            
+            <div id="manualDimensions" style="display: none; margin-top: 10px; padding: 10px; background: #f8f9fa; border-radius: 4px;">
+                <h4>Manual Dimension Override</h4>
+                <p>If the automatic parsing failed, try these common MRO MARCI dimensions:</p>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin: 10px 0;">
+                    <button class="btn" onclick="tryDimension(1024, 1024)" style="font-size: 12px;">1024×1024</button>
+                    <button class="btn" onclick="tryDimension(512, 512)" style="font-size: 12px;">512×512</button>
+                    <button class="btn" onclick="tryDimension(2048, 1024)" style="font-size: 12px;">2048×1024</button>
+                    <button class="btn" onclick="tryDimension(1024, 2048)" style="font-size: 12px;">1024×2048</button>
+                    <button class="btn" onclick="tryDimension(2048, 2048)" style="font-size: 12px;">2048×2048</button>
+                    <button class="btn" onclick="tryDimension(1024, 512)" style="font-size: 12px;">1024×512</button>
+                </div>
+                <p style="font-size: 11px; color: #666;">Click a dimension to try it with your file</p>
+            </div>
+            
+            <div class="file-info" id="fileInfo" style="display: none;">
+                <h4>File Information</h4>
+                <div id="fileDetails"></div>
+            </div>
+            
+            <div style="margin-top: 20px;">
+                <h4>Supported Formats:</h4>
+                <ul style="font-size: 12px; color: #666;">
+                    <li>Planetary .img files</li>
+                    <li>Astronomical image data</li>
+                    <li>NASA mission data files</li>
+                    <li>Scientific image formats</li>
+                </ul>
+            </div>
+            
+            <div style="margin-top: 20px;">
+                <a href="/" class="btn">← Back to Main Explorer</a>
+            </div>
+        </div>
+        
+        <div class="image-display">
+            <div class="image-container" id="imageContainer">
+                <div style="text-align: center; color: #666;">
+                    <h3>No .IMG file loaded</h3>
+                    <p>Upload a .img file to view it here</p>
+                </div>
+            </div>
+            
+            <div class="image-controls" id="imageControls" style="display: none;">
+                <button class="btn" onclick="zoomIn()">🔍+</button>
+                <button class="btn" onclick="zoomOut()">🔍-</button>
+                <button class="btn" onclick="resetZoom()">↺</button>
+                <button class="btn btn-danger" onclick="clearImage()">🗑️</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentImage = null;
+        let currentScale = 1;
+        let currentFile = null;
+        
+        // File upload handling
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const imageContainer = document.getElementById('imageContainer');
+        const fileInfo = document.getElementById('fileInfo');
+        const fileDetails = document.getElementById('fileDetails');
+        const imageControls = document.getElementById('imageControls');
+        
+        uploadArea.addEventListener('click', () => fileInput.click());
+        
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+        
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+        
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                handleFile(files[0]);
+            }
+        });
+        
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleFile(e.target.files[0]);
+            }
+        });
+        
+        function handleFile(file) {
+            if (!file.name.toLowerCase().endsWith('.img')) {
+                alert('Please select a .img file');
+                return;
+            }
+            
+            currentFile = file;
+            document.getElementById('analyzeBtn').style.display = 'block';
+            document.getElementById('manualBtn').style.display = 'block';
+            document.getElementById('gdalBtn').style.display = 'block';
+            
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            fetch('/upload_img', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    if (data.image_data) {
+                        displayImage(data.image_data, data.width, data.height, data.filename, data.format);
+                    } else {
+                        displayFileInfo(data.filename, data.size, data.message, data.format);
+                    }
+                } else {
+                    alert('Error: ' + data.error);
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Error uploading file: ' + error.message);
+            });
+        }
+        
+        function getGdalHelp() {
+            if (!currentFile) {
+                alert('Please upload a file first');
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('file', currentFile);
+            
+            fetch('/gdal_help', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    displayGdalCommands(data);
+                } else {
+                    alert('Error: ' + data.error);
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Error getting GDAL help: ' + error.message);
+            });
+        }
+        
+        function displayGdalCommands(data) {
+            imageContainer.innerHTML = `
+                <div style="text-align: left; color: #333; padding: 20px; max-width: 800px; margin: 0 auto;">
+                    <h3>🛠️ GDAL Command Suggestions</h3>
+                    <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin: 10px 0;">
+                        <h4>Try these GDAL commands:</h4>
+                        <div style="background: #2c3e50; color: #ecf0f1; padding: 10px; border-radius: 4px; font-family: monospace; font-size: 12px; overflow-x: auto;">
+                            ${data.gdal_commands.map(cmd => `<div style="margin: 5px 0;">${cmd}</div>`).join('')}
+                        </div>
+                    </div>
+                    
+                    ${data.detected_params.length > 0 ? `
+                    <div style="background: #e8f4fd; padding: 15px; border-radius: 8px; margin: 10px 0;">
+                        <h4>Detected Parameters from Header:</h4>
+                        <ul>
+                            ${data.detected_params.map(param => `<li><code>${param}</code></li>`).join('')}
+                        </ul>
+                    </div>
+                    ` : ''}
+                    
+                    <div style="background: #fff3cd; padding: 15px; border-radius: 8px; margin: 10px 0;">
+                        <h4>Instructions:</h4>
+                        <ol>
+                            <li>Copy one of the commands above</li>
+                            <li>Run it in your terminal with your .img file</li>
+                            <li>If it works, you'll get a proper PNG image</li>
+                            <li>Try different commands if the first one doesn't work</li>
+                        </ol>
+                    </div>
+                    
+                    <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin: 10px 0;">
+                        <h4>Header Analysis:</h4>
+                        <pre style="font-size: 11px; overflow-x: auto; white-space: pre-wrap;">${data.header_analysis}</pre>
+                    </div>
+                </div>
+            `;
+            
+            fileInfo.style.display = 'block';
+            fileDetails.innerHTML = `
+                <p><strong>GDAL Commands Generated</strong></p>
+                <p>Try these commands in your terminal</p>
+            `;
+        }
+        
+        function tryManualDimensions() {
+            document.getElementById('manualDimensions').style.display = 'block';
+        }
+        
+        function tryDimension(width, height) {
+            if (!currentFile) {
+                alert('Please upload a file first');
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('file', currentFile);
+            formData.append('width', width);
+            formData.append('height', height);
+            
+            fetch('/try_dimensions', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    displayImage(data.image_data, data.width, data.height, data.filename, data.format);
+                } else {
+                    alert('Error: ' + data.error);
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Error trying dimensions: ' + error.message);
+            });
+        }
+        
+        function analyzeFile() {
+            if (!currentFile) {
+                alert('Please upload a file first');
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('file', currentFile);
+            
+            fetch('/analyze_img', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    displayAnalysis(data);
+                } else {
+                    alert('Error: ' + data.error);
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Error analyzing file: ' + error.message);
+            });
+        }
+        
+        function displayAnalysis(data) {
+            imageContainer.innerHTML = `
+                <div style="text-align: left; color: #333; padding: 20px; max-width: 800px; margin: 0 auto;">
+                    <h3>🔍 File Analysis Results</h3>
+                    <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin: 10px 0;">
+                        <h4>Basic Information</h4>
+                        <p><strong>Filename:</strong> ${data.filename}</p>
+                        <p><strong>File Size:</strong> ${data.size} bytes (${(data.size / 1024).toFixed(2)} KB)</p>
+                        <p><strong>File Signature:</strong> ${data.signature_hex}</p>
+                    </div>
+                    
+                    <div style="background: #e8f4fd; padding: 15px; border-radius: 8px; margin: 10px 0;">
+                        <h4>Format Detection</h4>
+                        <p><strong>PDS Format:</strong> ${data.is_pds ? '✅ Yes' : '❌ No'}</p>
+                        <p><strong>VICAR Format:</strong> ${data.is_vicar ? '✅ Yes' : '❌ No'}</p>
+                        <p><strong>FITS Format:</strong> ${data.is_fits ? '✅ Yes' : '❌ No'}</p>
+                    </div>
+                    
+                    <div style="background: #fff3cd; padding: 15px; border-radius: 8px; margin: 10px 0;">
+                        <h4>Possible Dimensions</h4>
+                        <p>Based on file size, these dimensions are possible:</p>
+                        <ul>
+                            ${data.possible_dimensions.map(dim => `<li>${dim[0]} × ${dim[1]} pixels</li>`).join('')}
+                        </ul>
+                    </div>
+                    
+                    <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin: 10px 0;">
+                        <h4>Header Preview</h4>
+                        <pre style="font-size: 12px; overflow-x: auto; white-space: pre-wrap;">${data.header_preview}</pre>
+                    </div>
+                    
+                    <div style="background: #d1ecf1; padding: 15px; border-radius: 8px; margin: 10px 0;">
+                        <h4>Analysis Summary</h4>
+                        <p>${data.analysis}</p>
+                    </div>
+                </div>
+            `;
+            
+            fileInfo.style.display = 'block';
+            fileDetails.innerHTML = `
+                <p><strong>Analysis Complete</strong></p>
+                <p>Check the detailed analysis in the main area</p>
+            `;
+        }
+        
+        function displayImage(imageData, width, height, filename, format) {
+            imageContainer.innerHTML = `
+                <img src="${imageData}" class="uploaded-image" id="uploadedImage" 
+                     style="transform: scale(${currentScale});">
+            `;
+            
+            currentImage = document.getElementById('uploadedImage');
+            imageControls.style.display = 'block';
+            fileInfo.style.display = 'block';
+            
+            fileDetails.innerHTML = `
+                <p><strong>Filename:</strong> ${filename}</p>
+                <p><strong>Dimensions:</strong> ${width} × ${height} pixels</p>
+                <p><strong>Format:</strong> ${format || 'Unknown'}</p>
+                <p><strong>Status:</strong> Successfully loaded and converted</p>
+            `;
+        }
+        
+        function displayFileInfo(filename, size, message, format) {
+            imageContainer.innerHTML = `
+                <div style="text-align: center; color: #666;">
+                    <h3>📄 File Uploaded</h3>
+                    <p>${message}</p>
+                </div>
+            `;
+            
+            fileInfo.style.display = 'block';
+            fileDetails.innerHTML = `
+                <p><strong>Filename:</strong> ${filename}</p>
+                <p><strong>Size:</strong> ${(size / 1024).toFixed(2)} KB</p>
+                <p><strong>Format:</strong> ${format || 'Unknown'}</p>
+                <p><strong>Status:</strong> ${message}</p>
+            `;
+        }
+        
+        function zoomIn() {
+            if (currentImage) {
+                currentScale *= 1.2;
+                currentImage.style.transform = `scale(${currentScale})`;
+            }
+        }
+        
+        function zoomOut() {
+            if (currentImage) {
+                currentScale *= 0.8;
+                currentImage.style.transform = `scale(${currentScale})`;
+            }
+        }
+        
+        function resetZoom() {
+            if (currentImage) {
+                currentScale = 1;
+                currentImage.style.transform = `scale(${currentScale})`;
+            }
+        }
+        
+        function clearImage() {
+            imageContainer.innerHTML = `
+                <div style="text-align: center; color: #666;">
+                    <h3>No .IMG file loaded</h3>
+                    <p>Upload a .img file to view it here</p>
+                </div>
+            `;
+            imageControls.style.display = 'none';
+            fileInfo.style.display = 'none';
+            currentImage = null;
+            currentScale = 1;
+        }
+    </script>
+</body>
+</html>
