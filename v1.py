@@ -13,6 +13,8 @@ import plotly.graph_objects as go
 import requests
 from PIL import Image
 import json
+import uuid
+from pathlib import Path
 
 from dash import Dash, Input, Output, State, dcc, html
 from dash.dependencies import ALL
@@ -52,10 +54,12 @@ TERRAIN_PAN_LABELS = {
 }
 
 REQUEST_HEADERS = {"User-Agent": USER_AGENT}
-TERRAIN_PAN_BUFFER_DEGREES = 1.0
+TERRAIN_PAN_BUFFER_DEGREES = 2.0
 TERRAIN_PAN_MARGIN_DEGREES = 0.05
 TERRAIN_MAX_PIXEL_RESOLUTION = 384
 TERRAIN_MAX_PATCH_DEGREES = 14.0
+
+FEATURE_STORAGE_PATH = Path(__file__).resolve().parent / "feature_store.json"
 
 
 REFERENCE_FEATURES: List[Dict[str, Any]] = [
@@ -89,6 +93,28 @@ REFERENCE_FEATURES: List[Dict[str, Any]] = [
 ]
 
 
+def load_initial_feature_collection() -> List[Dict[str, Any]]:
+    if FEATURE_STORAGE_PATH.exists():
+        try:
+            data = json.loads(FEATURE_STORAGE_PATH.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                return data or list(REFERENCE_FEATURES)
+        except (json.JSONDecodeError, OSError):
+            pass
+    return list(REFERENCE_FEATURES)
+
+
+def persist_feature_collection(features: Sequence[Dict[str, Any]]) -> None:
+    try:
+        FEATURE_STORAGE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        FEATURE_STORAGE_PATH.write_text(
+            json.dumps(list(features), indent=2),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+
+
 def http_get_json(url: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Fetch JSON with shared headers and error handling."""
     response = requests.get(url, params=params, timeout=20, headers=REQUEST_HEADERS)
@@ -106,6 +132,11 @@ def safe_float(value: Any) -> Optional[float]:
 def get_dynamic_callback_index(expected_type: str) -> Optional[int]:
     """Return the triggered index for a Dash pattern-matching callback."""
     ctx = dash.callback_context
+    triggered_events = getattr(ctx, "triggered", []) or []
+    if triggered_events:
+        value = triggered_events[0].get("value")
+        if value in (None, 0, []):
+            return None
     triggered_id = getattr(ctx, "triggered_id", None)
     if isinstance(triggered_id, dict):
         if triggered_id.get("type") == expected_type:
@@ -856,8 +887,9 @@ app.layout = html.Div(
         dcc.Store(id="overlay-catalog-store", storage_type="memory"),
         dcc.Store(id="probe-store", storage_type="memory"),
         dcc.Store(id="terrain-store", storage_type="memory"),
+        dcc.Store(id="terrain-prefetch-store", storage_type="memory"),
         dcc.Store(id="feature-edit-index", storage_type="memory"),
-        dcc.Store(id="feature-store", storage_type="memory", data=REFERENCE_FEATURES),
+        dcc.Store(id="feature-store", storage_type="memory", data=load_initial_feature_collection()),
     ],
     style={
         "maxWidth": "1200px",
@@ -1087,6 +1119,7 @@ def load_terrain_patch(
     Output("terrain-store", "data", allow_duplicate=True),
     Output("probe-store", "data", allow_duplicate=True),
     Output("terrain-status", "children", allow_duplicate=True),
+    Output("terrain-prefetch-store", "data", allow_duplicate=True),
     Input("terrain-pan-north", "n_clicks"),
     Input("terrain-pan-south", "n_clicks"),
     Input("terrain-pan-east", "n_clicks"),
@@ -1096,6 +1129,7 @@ def load_terrain_patch(
     State("terrain-lon-input", "value"),
     State("terrain-size-slider", "value"),
     State("terrain-store", "data"),
+    State("terrain-prefetch-store", "data"),
     prevent_initial_call=True,
 )
 def pan_probe_marker(
@@ -1108,6 +1142,7 @@ def pan_probe_marker(
     lon_value: Any,
     patch_size: Optional[float],
     terrain_data: Optional[Dict[str, Any]],
+    prefetch_state: Optional[Dict[str, Any]],
 ):
     ctx = dash.callback_context
     triggered_id = getattr(ctx, "triggered_id", None)
@@ -1129,7 +1164,7 @@ def pan_probe_marker(
             base_lon = safe_float(probe.get("lon"))
     if base_lat is None or base_lon is None:
         status = html.Span("Select or place a marker before panning.", style={"color": "#facc15"})
-        return dash.no_update, dash.no_update, status
+        return dash.no_update, dash.no_update, status, dash.no_update
 
     current_lat = float(base_lat)
     current_lon = float(base_lon)
@@ -1139,7 +1174,7 @@ def pan_probe_marker(
 
     if new_lat == current_lat and new_lon == current_lon:
         status = html.Span("Reached coordinate boundary; try a different direction.", style={"color": "#f97316"})
-        return dash.no_update, dash.no_update, status
+        return dash.no_update, dash.no_update, status, dash.no_update
 
     view_size_value = safe_float(patch_size)
     if view_size_value is None and isinstance(terrain_data, dict):
@@ -1147,32 +1182,97 @@ def pan_probe_marker(
     if view_size_value is None:
         view_size_value = DEFAULT_TERRAIN_PATCH_DEGREES
     view_size = float(view_size_value)
+
+    def has_matching_prefetch(state: Optional[Dict[str, Any]]) -> bool:
+        if not isinstance(state, dict):
+            return False
+        lat_match = safe_float(state.get("lat"))
+        lon_match = safe_float(state.get("lon"))
+        size_match = safe_float(state.get("view_size"))
+        return (
+            lat_match is not None
+            and lon_match is not None
+            and abs(lat_match - new_lat) < 1e-6
+            and abs(lon_match - new_lon) < 1e-6
+            and (size_match is None or abs(float(size_match) - view_size) < 1e-6)
+        )
+
+    def build_prefetch_request() -> Dict[str, Any]:
+        return {
+            "lat": new_lat,
+            "lon": new_lon,
+            "view_size": view_size,
+            "requested_at": dt.datetime.utcnow().isoformat(),
+            "request_id": str(uuid.uuid4()),
+        }
+
+    prefetch_request: Any = dash.no_update
     cached_payload = reuse_cached_terrain_patch(terrain_data, new_lat, new_lon, view_size)
-    used_cache = cached_payload is not None
+    if cached_payload is not None:
+        elevation = sample_patch_elevation(cached_payload, new_lat, new_lon)
+        if elevation is None:
+            elevation = fetch_mola_elevation(new_lat, new_lon)
+        status = html.Span(
+            f"Moved marker {TERRAIN_PAN_LABELS[button_id]} by {TERRAIN_PAN_STEP_DEGREES:.2f} deg (prefetching in background).",
+            style={"color": "#38bdf8"},
+        )
+        if not has_matching_prefetch(prefetch_state):
+            prefetch_request = build_prefetch_request()
+        return (
+            cached_payload,
+            {"lat": new_lat, "lon": new_lon, "elevation": elevation},
+            status,
+            prefetch_request,
+        )
 
-    if cached_payload is None:
-        try:
-            cached_payload = build_terrain_payload(new_lat, new_lon, view_size)
-        except RuntimeError as exc:
-            elevation = sample_patch_elevation(terrain_data or {}, new_lat, new_lon)
-            if elevation is None:
-                elevation = fetch_mola_elevation(new_lat, new_lon)
-            status = html.Span(
-                f"Moved marker {TERRAIN_PAN_LABELS[button_id]}, but terrain load failed: {exc}",
-                style={"color": "#f87171"},
-            )
-            return dash.no_update, {"lat": new_lat, "lon": new_lon, "elevation": elevation}, status
-
-    elevation = sample_patch_elevation(cached_payload, new_lat, new_lon)
+    elevation = sample_patch_elevation(terrain_data or {}, new_lat, new_lon)
     if elevation is None:
         elevation = fetch_mola_elevation(new_lat, new_lon)
-    status_text = (
-        f"Moved marker {TERRAIN_PAN_LABELS[button_id]} by {TERRAIN_PAN_STEP_DEGREES:.2f} deg using cached terrain." if used_cache else
-        f"Moved marker {TERRAIN_PAN_LABELS[button_id]} by {TERRAIN_PAN_STEP_DEGREES:.2f} deg and refreshed terrain."
+    status = html.Span(
+        f"Fetching fresh terrain while moving {TERRAIN_PAN_LABELS[button_id]}...",
+        style={"color": "#38bdf8"},
     )
-    status = html.Span(status_text, style={"color": "#38bdf8"})
-    return cached_payload, {"lat": new_lat, "lon": new_lon, "elevation": elevation}, status
+    if not has_matching_prefetch(prefetch_state):
+        prefetch_request = build_prefetch_request()
+    return (
+        dash.no_update,
+        {"lat": new_lat, "lon": new_lon, "elevation": elevation},
+        status,
+        prefetch_request,
+    )
 
+@app.callback(
+    Output("terrain-store", "data", allow_duplicate=True),
+    Output("terrain-status", "children", allow_duplicate=True),
+    Output("terrain-prefetch-store", "data", allow_duplicate=True),
+    Input("terrain-prefetch-store", "data"),
+    prevent_initial_call=True,
+)
+def fulfill_terrain_prefetch(request: Optional[Dict[str, Any]]):
+    if not isinstance(request, dict):
+        raise PreventUpdate
+
+    lat = safe_float(request.get("lat"))
+    lon = safe_float(request.get("lon"))
+    view_size = safe_float(request.get("view_size")) or DEFAULT_TERRAIN_PATCH_DEGREES
+
+    if lat is None or lon is None:
+        return dash.no_update, dash.no_update, None
+
+    try:
+        payload = build_terrain_payload(float(lat), float(lon), float(view_size))
+    except RuntimeError as exc:
+        status = html.Span(
+            f"Terrain refresh failed: {exc}",
+            style={"color": "#f87171"},
+        )
+        return dash.no_update, status, None
+
+    status = html.Span(
+        "Background terrain update complete.",
+        style={"color": "#34d399"},
+    )
+    return payload, status, None
 
 @app.callback(
     Output("click-readout", "children"),
@@ -1279,6 +1379,7 @@ def save_feature(
             f"Saved feature '{feature_data['name']}' at {lat_val:.2f}N, {lon_val:.2f}E",
             style={"color": "#34d399"},
         )
+    persist_feature_collection(updated)
     return updated, message, next_edit_index, "", ""
 
 
@@ -1342,6 +1443,7 @@ def render_feature_layers(features: Sequence[Dict[str, Any]]):
 
 
 @app.callback(
+    Output("terrain-store", "data", allow_duplicate=True),
     Output("probe-store", "data", allow_duplicate=True),
     Output("feature-name", "value", allow_duplicate=True),
     Output("feature-notes", "value", allow_duplicate=True),
@@ -1349,9 +1451,10 @@ def render_feature_layers(features: Sequence[Dict[str, Any]]):
     Output("terrain-status", "children", allow_duplicate=True),
     Input({"type": "feature-edit", "index": ALL}, "n_clicks"),
     State("feature-store", "data"),
+    State("terrain-size-slider", "value"),
     prevent_initial_call=True,
 )
-def on_feature_edit(n_clicks, features):
+def on_feature_edit(n_clicks, features, view_size):
     index = get_dynamic_callback_index("feature-edit")
     if (
         features is None
@@ -1363,14 +1466,48 @@ def on_feature_edit(n_clicks, features):
     feature = features[index]
     lat = float(feature.get("lat", 0.0))
     lon = float(feature.get("lon", 0.0))
-    name = feature.get("name", "")
-    notes = feature.get("notes", "")
-    probe = {"lat": lat, "lon": lon, "elevation": feature.get("elevation")}
-    status = html.Span(
-        f"Editing feature '{name}'. Adjust details and press Save feature to update.",
-        style={"color": "#38bdf8"},
+    raw_name = feature.get("name", "")
+    raw_notes = feature.get("notes", "")
+    name_value = str(raw_name or "")
+    notes_value = str(raw_notes or "")
+    view_size_value = safe_float(view_size)
+    if view_size_value is None:
+        view_size_value = DEFAULT_TERRAIN_PATCH_DEGREES
+    view_size_float = float(view_size_value)
+
+    terrain_payload: Any = dash.no_update
+    status: Any
+    elevation = feature.get("elevation")
+    try:
+        payload = build_terrain_payload(lat, lon, view_size_float)
+        terrain_payload = payload
+        sampled = sample_patch_elevation(payload, lat, lon)
+        if sampled is not None:
+            elevation = sampled
+        status = html.Span(
+            f"Editing feature '{name_value}'. Terrain preview loaded.",
+            style={"color": "#38bdf8"},
+        )
+    except RuntimeError as exc:
+        status = html.Span(
+            f"Editing feature '{name_value}'. Terrain preview failed: {exc}",
+            style={"color": "#f97316"},
+        )
+        if elevation is None:
+            elevation = fetch_mola_elevation(lat, lon)
+
+    if elevation is None:
+        elevation = fetch_mola_elevation(lat, lon)
+
+    probe = {"lat": lat, "lon": lon, "elevation": elevation}
+    return (
+        terrain_payload,
+        probe,
+        name_value,
+        notes_value,
+        index,
+        status,
     )
-    return probe, name, notes, index, status
 
 
 @app.callback(
@@ -1400,6 +1537,7 @@ def on_feature_delete(n_clicks, features, edit_index):
             new_edit_index = None
         elif edit_index > index:
             new_edit_index = edit_index - 1
+    persist_feature_collection(updated)
     return updated, message, new_edit_index
 
 
