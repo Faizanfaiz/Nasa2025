@@ -1,5 +1,9 @@
 # Mars Surface Explorer with SAM Integration
 
+## Access it here: http://cosmos-cegqc3a3ghfxchhy.ukwest-01.azurewebsites.net
+
+## Soon on https://www.cosmos.cooking
+
 A comprehensive Mars surface exploration tool that combines NASA's Mars Global Surveyor (MGS) MOLA elevation data with Mars Reconnaissance Orbiter (MRO) imagery, enhanced with AI-powered segmentation using Meta's Segment Anything Model (SAM).
 
 ## Features
