@@ -27,7 +27,6 @@ import dash_leaflet as dl
 # SAM integration imports
 try:
     from sam_viewer import create_sam_viewer_modal, setup_sam_callbacks
-
     SAM_VIEWER_AVAILABLE = True
 except ImportError:
     SAM_VIEWER_AVAILABLE = False
@@ -86,7 +85,7 @@ REFERENCE_FEATURES: List[Dict[str, Any]] = [
         "notes": "Reference peak for scale.",
         "time": "Global",
         "source": "reference",
-        "dataset": "MOLA",
+        "dataset": "MOLA"
     },
     {
         "name": "Valles Marineris",
@@ -95,7 +94,7 @@ REFERENCE_FEATURES: List[Dict[str, Any]] = [
         "notes": "Canyon network stretching nearly 4,000 km.",
         "time": "Global",
         "source": "reference",
-        "dataset": "MOLA",
+        "dataset": "MOLA"
     },
     {
         "name": "Gale Crater",
@@ -104,7 +103,7 @@ REFERENCE_FEATURES: List[Dict[str, Any]] = [
         "notes": "Curiosity rover landing site.",
         "time": "Global",
         "source": "reference",
-        "dataset": "MOLA",
+        "dataset": "MOLA"
     },
 ]
 
@@ -159,6 +158,7 @@ def encode_snapshot_to_data_uri(snapshot_key: str) -> Optional[str]:
     except OSError:
         return None
     return f"data:image/png;base64,{base64.b64encode(data).decode()}"
+
 
 
 def run_sam_annotation(snapshot_path: Path) -> str:
@@ -275,10 +275,7 @@ def fetch_wmts_metadata(endpoint: str) -> Optional[Dict[str, Any]]:
     except ET.ParseError:
         return None
 
-    ns = {
-        "wmts": "http://www.opengis.net/wmts/1.0",
-        "ows": "http://www.opengis.net/ows/1.1",
-    }
+    ns = {"wmts": "http://www.opengis.net/wmts/1.0", "ows": "http://www.opengis.net/ows/1.1"}
     resource = xml_root.find(".//wmts:ResourceURL", ns)
     tile_matrices = xml_root.findall(".//wmts:TileMatrix", ns)
     fmt = xml_root.find(".//wmts:Layer/wmts:Format", ns)
@@ -323,7 +320,7 @@ def build_tile_template(endpoint: str) -> Optional[Dict[str, Any]]:
     template = template.replace("{TileMatrix}", "{z}")
     template = template.replace("{TileRow}", "{y}")
     template = template.replace("{TileCol}", "{x}")
-    template = template.replace("1.0.0//", "1.0.0/")
+    template = template.replace('1.0.0//', '1.0.0/')
     return {
         "url": template,
         "format": meta["format"],
@@ -352,9 +349,7 @@ def parse_bbox(bbox_str: Optional[str]) -> Optional[List[List[float]]]:
     return [[min_lat, min_lon], [max_lat, max_lon]]
 
 
-def clamp_bounds(
-    bounds: Optional[Sequence[Sequence[float]]],
-) -> Optional[Tuple[float, float, float, float]]:
+def clamp_bounds(bounds: Optional[Sequence[Sequence[float]]]) -> Optional[Tuple[float, float, float, float]]:
     if not bounds or len(bounds) != 2:
         return None
     sw, ne = bounds
@@ -369,9 +364,7 @@ def clamp_bounds(
     return (min_lon, min_lat, max_lon, max_lat)
 
 
-def search_wmts_products(
-    bounds: Optional[Sequence[Sequence[float]]], instrument: str
-) -> List[Dict[str, Any]]:
+def search_wmts_products(bounds: Optional[Sequence[Sequence[float]]], instrument: str) -> List[Dict[str, Any]]:
     """Query Trek search service for WMTS mosaics intersecting the viewport."""
     clamped = clamp_bounds(bounds)
     params: Dict[str, Any] = {
@@ -467,9 +460,7 @@ def clean_mola_array(array: np.ndarray) -> np.ndarray:
     return cleaned
 
 
-def fetch_mola_patch(
-    lat: float, lon: float, size_deg: float, pixels: int
-) -> Dict[str, Any]:
+def fetch_mola_patch(lat: float, lon: float, size_deg: float, pixels: int) -> Dict[str, Any]:
     half = max(size_deg, 0.2) / 2.0
     min_lat = max(-90.0, lat - half)
     max_lat = min(90.0, lat + half)
@@ -486,7 +477,7 @@ def fetch_mola_patch(
     }
     try:
         response = requests.get(
-            ELEVATION_IDENTIFY_URL.replace("/identify", "/exportImage"),
+            ELEVATION_IDENTIFY_URL.replace('/identify', '/exportImage'),
             params=params,
             timeout=60,
             headers=REQUEST_HEADERS,
@@ -515,10 +506,7 @@ def fetch_mola_patch(
 
 def determine_raw_patch_request(view_size: float) -> tuple[float, int]:
     view = max(float(view_size), 0.5)
-    raw_size = min(
-        max(view + 2.0 * TERRAIN_PAN_BUFFER_DEGREES, view * 1.5),
-        TERRAIN_MAX_PATCH_DEGREES,
-    )
+    raw_size = min(max(view + 2.0 * TERRAIN_PAN_BUFFER_DEGREES, view * 1.5), TERRAIN_MAX_PATCH_DEGREES)
     scale = max(raw_size / view, 1.0)
     pixels = int(min(TERRAIN_PIXEL_RESOLUTION * scale, TERRAIN_MAX_PIXEL_RESOLUTION))
     pixels = max(pixels, TERRAIN_PIXEL_RESOLUTION)
@@ -541,12 +529,8 @@ def extract_view_from_raw_patch(
     lat_max = center_lat + half
     lon_min = center_lon - half
     lon_max = center_lon + half
-    lat_mask = (latitudes >= lat_min - TERRAIN_PAN_MARGIN_DEGREES) & (
-        latitudes <= lat_max + TERRAIN_PAN_MARGIN_DEGREES
-    )
-    lon_mask = (longitudes >= lon_min - TERRAIN_PAN_MARGIN_DEGREES) & (
-        longitudes <= lon_max + TERRAIN_PAN_MARGIN_DEGREES
-    )
+    lat_mask = (latitudes >= lat_min - TERRAIN_PAN_MARGIN_DEGREES) & (latitudes <= lat_max + TERRAIN_PAN_MARGIN_DEGREES)
+    lon_mask = (longitudes >= lon_min - TERRAIN_PAN_MARGIN_DEGREES) & (longitudes <= lon_max + TERRAIN_PAN_MARGIN_DEGREES)
     if not np.any(lat_mask) or not np.any(lon_mask):
         return None
     lat_indices = np.where(lat_mask)[0]
@@ -624,9 +608,8 @@ def reuse_cached_terrain_patch(
     return view_patch
 
 
-def sample_patch_elevation(
-    patch: Dict[str, Any], lat: float, lon: float
-) -> Optional[float]:
+
+def sample_patch_elevation(patch: Dict[str, Any], lat: float, lon: float) -> Optional[float]:
     latitudes = np.array(patch.get("latitudes", []), dtype=float)
     longitudes = np.array(patch.get("longitudes", []), dtype=float)
     elevations = np.array(patch.get("elevations", []), dtype=float)
@@ -716,14 +699,8 @@ def build_feature_markers(features: Sequence[Dict[str, Any]]) -> List[dl.Marker]
             [
                 html.H4(feature.get("name", "Feature")),
                 html.P(feature.get("notes", "")),
-                html.P(
-                    f"Dataset: {feature.get('dataset', 'N/A')}",
-                    style={"marginBottom": "0.25rem"},
-                ),
-                html.P(
-                    f"Observed: {feature.get('time', 'All')}",
-                    style={"marginBottom": "0"},
-                ),
+                html.P(f"Dataset: {feature.get('dataset', 'N/A')}", style={"marginBottom": "0.25rem"}),
+                html.P(f"Observed: {feature.get('time', 'All')}", style={"marginBottom": "0"}),
             ]
         )
         markers.append(
@@ -744,21 +721,14 @@ def build_observation_cards(observations: Sequence[Dict[str, Any]]) -> List[html
         cards.append(
             html.Div(
                 [
-                    html.Strong(
-                        f"{idx}: {observation['title']}", style={"display": "block"}
-                    ),
+                    html.Strong(f"{idx}: {observation['title']}", style={"display": "block"}),
                     html.Span(
                         f"Observed {observation['date']} ({observation.get('instrument', '')})",
                         style={"fontSize": "0.85rem", "opacity": 0.8},
                     ),
                     html.Span(
                         observation.get("endpoint", ""),
-                        style={
-                            "fontSize": "0.7rem",
-                            "opacity": 0.6,
-                            "display": "block",
-                            "marginTop": "0.25rem",
-                        },
+                        style={"fontSize": "0.7rem", "opacity": 0.6, "display": "block", "marginTop": "0.25rem"},
                     ),
                 ],
                 style={
@@ -773,6 +743,7 @@ def build_observation_cards(observations: Sequence[Dict[str, Any]]) -> List[html
 
 
 app = Dash(__name__)
+server = app.server
 app.title = "COSMOS (Collaborative Open Spatiotemporal Mapping & Observation Suite)"
 
 app.layout = html.Div(
@@ -803,10 +774,7 @@ app.layout = html.Div(
                             n_clicks=0,
                             style={"marginTop": "0.5rem", "width": "100%"},
                         ),
-                        html.Div(
-                            id="overlay-status",
-                            style={"marginTop": "0.5rem", "minHeight": "1.5rem"},
-                        ),
+                        html.Div(id="overlay-status", style={"marginTop": "0.5rem", "minHeight": "1.5rem"}),
                         html.Label("Observation timeline", style={"marginTop": "1rem"}),
                         dcc.Slider(
                             id="observation-slider",
@@ -830,29 +798,21 @@ app.layout = html.Div(
                         html.Div(
                             [
                                 html.H3("Clicked point"),
-                                html.Div(
-                                    id="click-readout", style={"minHeight": "3.5rem"}
-                                ),
+                                html.Div(id="click-readout", style={"minHeight": "3.5rem"}),
                             ],
                             style={"marginTop": "1.2rem"},
                         ),
                         html.Div(
                             [
                                 html.H3("Current overlay"),
-                                html.Div(
-                                    id="observation-summary",
-                                    style={"minHeight": "4.5rem"},
-                                ),
+                                html.Div(id="observation-summary", style={"minHeight": "4.5rem"}),
                             ],
                             style={"marginTop": "1rem"},
                         ),
                         html.Div(
                             [
                                 html.H3("Overlay candidates"),
-                                html.Div(
-                                    id="observation-cards",
-                                    style={"display": "grid", "gap": "0.4rem"},
-                                ),
+                                html.Div(id="observation-cards", style={"display": "grid", "gap": "0.4rem"}),
                             ],
                             style={"marginTop": "1rem"},
                         ),
@@ -867,16 +827,8 @@ app.layout = html.Div(
                             zoom=3,
                             eventHandlers={"click": {"latlng": True}},
                             children=[
-                                dl.TileLayer(
-                                    id="base-layer", url=MOLA_TILE_TEMPLATE, maxZoom=12
-                                ),
-                                dl.TileLayer(
-                                    id="overlay-layer",
-                                    opacity=0.75,
-                                    url="",
-                                    minZoom=0,
-                                    maxZoom=18,
-                                ),
+                                dl.TileLayer(id="base-layer", url=MOLA_TILE_TEMPLATE, maxZoom=12),
+                                dl.TileLayer(id="overlay-layer", opacity=0.75, url='', minZoom=0, maxZoom=18),
                                 dl.Marker(
                                     id="probe-marker",
                                     position=[0.0, 0.0],
@@ -885,26 +837,17 @@ app.layout = html.Div(
                                 ),
                                 dl.LayerGroup(id="feature-layer"),
                             ],
-                            style={
-                                "height": "70vh",
-                                "width": "100%",
-                                "cursor": "crosshair",
-                            },
+                            style={"height": "70vh", "width": "100%", "cursor": "crosshair"},
                             zoomControl=True,
                             preferCanvas=True,
                         ),
                         html.Div(
                             [
-                                html.H3(
-                                    "3D terrain preview", style={"marginTop": "1rem"}
-                                ),
+                                html.H3("3D terrain preview", style={"marginTop": "1rem"}),
                                 html.Div(
                                     "Click the map or drag the marker; coordinates below update automatically.",
                                     id="terrain-status",
-                                    style={
-                                        "minHeight": "1.4rem",
-                                        "marginBottom": "0.5rem",
-                                    },
+                                    style={"minHeight": "1.4rem", "marginBottom": "0.5rem"},
                                 ),
                                 html.Div(
                                     [
@@ -930,134 +873,26 @@ app.layout = html.Div(
                                         ),
                                         html.Div(
                                             [
-                                                html.Button(
-                                                    "^",
-                                                    id="terrain-pan-north",
-                                                    n_clicks=0,
-                                                    style={
-                                                        "gridColumn": "2",
-                                                        "padding": "0.65rem 0.45rem",
-                                                        "fontSize": "1.6rem",
-                                                        "backgroundColor": "#0f172a",
-                                                        "color": "#f8fafc",
-                                                        "border": "1px solid #334155",
-                                                        "borderRadius": "0.5rem",
-                                                        "minWidth": "3.2rem",
-                                                        "minHeight": "3.2rem",
-                                                    },
-                                                    title="Pan marker north",
-                                                ),
-                                                html.Button(
-                                                    "<",
-                                                    id="terrain-pan-west",
-                                                    n_clicks=0,
-                                                    style={
-                                                        "gridRow": "2",
-                                                        "gridColumn": "1",
-                                                        "padding": "0.65rem 0.45rem",
-                                                        "fontSize": "1.6rem",
-                                                        "backgroundColor": "#0f172a",
-                                                        "color": "#f8fafc",
-                                                        "border": "1px solid #334155",
-                                                        "borderRadius": "0.5rem",
-                                                        "minWidth": "3.2rem",
-                                                        "minHeight": "3.2rem",
-                                                    },
-                                                    title="Pan marker west",
-                                                ),
-                                                html.Div(
-                                                    "Pan terrain",
-                                                    style={
-                                                        "gridRow": "2",
-                                                        "gridColumn": "2",
-                                                        "fontSize": "0.85rem",
-                                                        "opacity": 0.8,
-                                                        "alignSelf": "center",
-                                                    },
-                                                ),
-                                                html.Button(
-                                                    ">",
-                                                    id="terrain-pan-east",
-                                                    n_clicks=0,
-                                                    style={
-                                                        "gridRow": "2",
-                                                        "gridColumn": "3",
-                                                        "padding": "0.65rem 0.45rem",
-                                                        "fontSize": "1.6rem",
-                                                        "backgroundColor": "#0f172a",
-                                                        "color": "#f8fafc",
-                                                        "border": "1px solid #334155",
-                                                        "borderRadius": "0.5rem",
-                                                        "minWidth": "3.2rem",
-                                                        "minHeight": "3.2rem",
-                                                    },
-                                                    title="Pan marker east",
-                                                ),
-                                                html.Button(
-                                                    "v",
-                                                    id="terrain-pan-south",
-                                                    n_clicks=0,
-                                                    style={
-                                                        "gridRow": "3",
-                                                        "gridColumn": "2",
-                                                        "padding": "0.65rem 0.45rem",
-                                                        "fontSize": "1.6rem",
-                                                        "backgroundColor": "#0f172a",
-                                                        "color": "#f8fafc",
-                                                        "border": "1px solid #334155",
-                                                        "borderRadius": "0.5rem",
-                                                        "minWidth": "3.2rem",
-                                                        "minHeight": "3.2rem",
-                                                    },
-                                                    title="Pan marker south",
-                                                ),
+                                                html.Button("^", id="terrain-pan-north", n_clicks=0, style={"gridColumn": "2", "padding": "0.65rem 0.45rem", "fontSize": "1.6rem", "backgroundColor": "#0f172a", "color": "#f8fafc", "border": "1px solid #334155", "borderRadius": "0.5rem", "minWidth": "3.2rem", "minHeight": "3.2rem"}, title="Pan marker north"),
+                                                html.Button("<", id="terrain-pan-west", n_clicks=0, style={"gridRow": "2", "gridColumn": "1", "padding": "0.65rem 0.45rem", "fontSize": "1.6rem", "backgroundColor": "#0f172a", "color": "#f8fafc", "border": "1px solid #334155", "borderRadius": "0.5rem", "minWidth": "3.2rem", "minHeight": "3.2rem"}, title="Pan marker west"),
+                                                html.Div("Pan terrain", style={"gridRow": "2", "gridColumn": "2", "fontSize": "0.85rem", "opacity": 0.8, "alignSelf": "center"}),
+                                                html.Button(">", id="terrain-pan-east", n_clicks=0, style={"gridRow": "2", "gridColumn": "3", "padding": "0.65rem 0.45rem", "fontSize": "1.6rem", "backgroundColor": "#0f172a", "color": "#f8fafc", "border": "1px solid #334155", "borderRadius": "0.5rem", "minWidth": "3.2rem", "minHeight": "3.2rem"}, title="Pan marker east"),
+                                                html.Button("v", id="terrain-pan-south", n_clicks=0, style={"gridRow": "3", "gridColumn": "2", "padding": "0.65rem 0.45rem", "fontSize": "1.6rem", "backgroundColor": "#0f172a", "color": "#f8fafc", "border": "1px solid #334155", "borderRadius": "0.5rem", "minWidth": "3.2rem", "minHeight": "3.2rem"}, title="Pan marker south"),
                                             ],
-                                            style={
-                                                "display": "grid",
-                                                "gridTemplateColumns": "repeat(3, minmax(0, 1fr))",
-                                                "gridTemplateRows": "repeat(3, auto)",
-                                                "gap": "0.3rem",
-                                                "marginTop": "0.35rem",
-                                                "justifyItems": "center",
-                                            },
+                                            style={"display": "grid", "gridTemplateColumns": "repeat(3, minmax(0, 1fr))", "gridTemplateRows": "repeat(3, auto)", "gap": "0.3rem", "marginTop": "0.35rem", "justifyItems": "center"},
                                         ),
                                         html.Div(
                                             [
-                                                html.Button(
-                                                    "Load terrain patch",
-                                                    id="terrain-load-btn",
-                                                    n_clicks=0,
-                                                    style={"flex": "1"},
-                                                ),
-                                                html.Button(
-                                                    "Drop marker at inputs",
-                                                    id="terrain-place-btn",
-                                                    n_clicks=0,
-                                                    style={
-                                                        "flex": "1",
-                                                        "marginLeft": "0.5rem",
-                                                    },
-                                                ),
+                                                html.Button("Load terrain patch", id="terrain-load-btn", n_clicks=0, style={"flex": "1"}),
+                                                html.Button("Drop marker at inputs", id="terrain-place-btn", n_clicks=0, style={"flex": "1", "marginLeft": "0.5rem"}),
                                             ],
-                                            style={
-                                                "display": "flex",
-                                                "marginTop": "0.5rem",
-                                            },
+                                            style={"display": "flex", "marginTop": "0.5rem"},
                                         ),
                                         html.Button(
                                             "Capture terrain snapshot",
                                             id="terrain-capture-btn",
                                             n_clicks=0,
-                                            style={
-                                                "marginTop": "0.6rem",
-                                                "width": "100%",
-                                                "backgroundColor": "#0ea5e9",
-                                                "color": "#0f172a",
-                                                "border": "none",
-                                                "padding": "0.5rem",
-                                                "borderRadius": "0.4rem",
-                                                "fontWeight": "600",
-                                            },
+                                            style={"marginTop": "0.6rem", "width": "100%", "backgroundColor": "#0ea5e9", "color": "#0f172a", "border": "none", "padding": "0.5rem", "borderRadius": "0.4rem", "fontWeight": "600"},
                                         ),
                                     ],
                                     style={"display": "grid", "gap": "0.35rem"},
@@ -1068,40 +903,23 @@ app.layout = html.Div(
                                     style={"height": "52vh"},
                                     config={"displaylogo": False},
                                 ),
-                                html.Label(
-                                    "Patch width (degrees)",
-                                    style={"marginTop": "0.5rem"},
-                                ),
+                                html.Label("Patch width (degrees)", style={"marginTop": "0.5rem"}),
                                 dcc.Slider(
                                     id="terrain-size-slider",
                                     min=1.0,
                                     max=10.0,
                                     step=0.5,
                                     value=DEFAULT_TERRAIN_PATCH_DEGREES,
-                                    marks={
-                                        1.0: "1 deg",
-                                        4.0: "4 deg",
-                                        7.0: "7 deg",
-                                        10.0: "10 deg",
-                                    },
+                                    marks={1.0: "1 deg", 4.0: "4 deg", 7.0: "7 deg", 10.0: "10 deg"},
                                 ),
-                                html.Label(
-                                    "Vertical exaggeration",
-                                    style={"marginTop": "0.5rem"},
-                                ),
+                                html.Label("Vertical exaggeration", style={"marginTop": "0.5rem"}),
                                 dcc.Slider(
                                     id="terrain-exaggeration-slider",
                                     min=0.5,
                                     max=4.0,
                                     step=0.1,
                                     value=2.0,
-                                    marks={
-                                        0.5: "0.5x",
-                                        1.0: "1x",
-                                        2.0: "2x",
-                                        3.0: "3x",
-                                        4.0: "4x",
-                                    },
+                                    marks={0.5: "0.5x", 1.0: "1x", 2.0: "2x", 3.0: "3x", 4.0: "4x"},
                                 ),
                             ],
                             style={
@@ -1116,15 +934,8 @@ app.layout = html.Div(
                             [
                                 html.H3("Add a feature tag"),
                                 html.Label("Name"),
-                                dcc.Input(
-                                    id="feature-name",
-                                    type="text",
-                                    placeholder="Dust storm front",
-                                    style={"width": "100%"},
-                                ),
-                                html.Label(
-                                    "Latitude (deg N)", style={"marginTop": "0.5rem"}
-                                ),
+                                dcc.Input(id="feature-name", type="text", placeholder="Dust storm front", style={"width": "100%"}),
+                                html.Label("Latitude (deg N)", style={"marginTop": "0.5rem"}),
                                 dcc.Input(
                                     id="feature-lat",
                                     type="number",
@@ -1135,9 +946,7 @@ app.layout = html.Div(
                                     style={"width": "100%"},
                                     readOnly=True,
                                 ),
-                                html.Label(
-                                    "Longitude (deg E)", style={"marginTop": "0.5rem"}
-                                ),
+                                html.Label("Longitude (deg E)", style={"marginTop": "0.5rem"}),
                                 dcc.Input(
                                     id="feature-lon",
                                     type="number",
@@ -1154,19 +963,8 @@ app.layout = html.Div(
                                     placeholder="Context for this observation",
                                     style={"width": "100%", "height": "4.5rem"},
                                 ),
-                                html.Button(
-                                    "Save feature",
-                                    id="save-feature-btn",
-                                    n_clicks=0,
-                                    style={"marginTop": "0.75rem"},
-                                ),
-                                html.Div(
-                                    id="save-status",
-                                    style={
-                                        "marginTop": "0.5rem",
-                                        "minHeight": "1.5rem",
-                                    },
-                                ),
+                                html.Button("Save feature", id="save-feature-btn", n_clicks=0, style={"marginTop": "0.75rem"}),
+                                html.Div(id="save-status", style={"marginTop": "0.5rem", "minHeight": "1.5rem"}),
                             ],
                             style={
                                 "marginTop": "1rem",
@@ -1179,14 +977,7 @@ app.layout = html.Div(
                         html.Div(
                             [
                                 html.H3("Tracked features"),
-                                html.Div(
-                                    id="feature-list",
-                                    style={
-                                        "display": "grid",
-                                        "gap": "0.75rem",
-                                        "gridTemplateColumns": "repeat(auto-fit, minmax(220px, 1fr))",
-                                    },
-                                ),
+                                html.Div(id="feature-list", style={"display": "grid", "gap": "0.75rem", "gridTemplateColumns": "repeat(auto-fit, minmax(220px, 1fr))"}),
                             ],
                             style={"marginTop": "1.5rem"},
                         ),
@@ -1204,11 +995,7 @@ app.layout = html.Div(
         dcc.Store(id="terrain-prefetch-store", storage_type="memory"),
         dcc.Store(id="snapshot-view-store", storage_type="memory"),
         dcc.Store(id="feature-edit-index", storage_type="memory"),
-        dcc.Store(
-            id="feature-store",
-            storage_type="memory",
-            data=load_initial_feature_collection(),
-        ),
+        dcc.Store(id="feature-store", storage_type="memory", data=load_initial_feature_collection()),
         dcc.Store(id="sam-viewer-store", storage_type="memory"),
         dcc.Store(id="terrain-camera-store", storage_type="memory"),
         html.Div(id="snapshot-modal", style={"display": "none"}),
@@ -1239,9 +1026,7 @@ app.layout = html.Div(
 )
 def refresh_overlay_catalog(n_clicks: int, instrument: str, bounds: Any):
     if not n_clicks or instrument == "NONE":
-        message = html.Span(
-            "No overlay requested; showing global MOLA.", style={"opacity": 0.7}
-        )
+        message = html.Span("No overlay requested; showing global MOLA.", style={"opacity": 0.7})
         return [], message, 0, {}, 0, True, []
 
     try:
@@ -1249,27 +1034,15 @@ def refresh_overlay_catalog(n_clicks: int, instrument: str, bounds: Any):
         overlays = resolve_wmts_layers(docs)
     except requests.RequestException as exc:
         message = html.Span(f"Overlay search failed: {exc}", style={"color": "#f87171"})
-        return (
-            dash.no_update,
-            message,
-            dash.no_update,
-            dash.no_update,
-            dash.no_update,
-            dash.no_update,
-            dash.no_update,
-        )
+        return dash.no_update, message, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
 
     if not overlays:
-        message = html.Span(
-            "No WMTS products found in this view.", style={"color": "#fbbf24"}
-        )
+        message = html.Span("No WMTS products found in this view.", style={"color": "#fbbf24"})
         return [], message, 0, {}, 0, True, []
 
     marks = {index: overlays[index]["date"] for index in range(len(overlays))}
     cards = build_observation_cards(overlays)
-    message = html.Span(
-        f"Loaded {len(overlays)} overlay option(s).", style={"color": "#34d399"}
-    )
+    message = html.Span(f"Loaded {len(overlays)} overlay option(s).", style={"color": "#34d399"})
     return overlays, message, len(overlays) - 1, marks, len(overlays) - 1, False, cards
 
 
@@ -1284,17 +1057,12 @@ def refresh_overlay_catalog(n_clicks: int, instrument: str, bounds: Any):
     State("overlay-catalog-store", "data"),
     State("instrument-dropdown", "value"),
 )
-def update_overlay_layer(
-    index: int, opacity: float, catalog: Sequence[Dict[str, Any]], instrument: str
-):
+def update_overlay_layer(index: int, opacity: float, catalog: Sequence[Dict[str, Any]], instrument: str):
     if instrument == "NONE" or not catalog:
         summary = html.Div(
             [
                 html.Strong("Global MOLA hillshade"),
-                html.Span(
-                    "NASA MGS MOLA global hillshade at 463 m/pixel",
-                    style={"display": "block", "opacity": 0.7},
-                ),
+                html.Span("NASA MGS MOLA global hillshade at 463 m/pixel", style={"display": "block", "opacity": 0.7}),
             ]
         )
         return MOLA_TILE_TEMPLATE, 0.0, dash.no_update, dash.no_update, summary
@@ -1310,10 +1078,7 @@ def update_overlay_layer(
                 f"Observed {observation.get('date', 'Unknown')} - {observation.get('instrument', '')}",
                 style={"display": "block", "opacity": 0.75},
             ),
-            html.Span(
-                observation.get("endpoint", ""),
-                style={"fontSize": "0.75rem", "opacity": 0.6},
-            ),
+            html.Span(observation.get("endpoint", ""), style={"fontSize": "0.75rem", "opacity": 0.6}),
         ]
     )
     tile_url = observation.get("tile_url")
@@ -1357,9 +1122,7 @@ def handle_probe_source(
     trigger = ctx.triggered[0]["prop_id"].split(".")[0]
 
     if trigger == "mars-map":
-        latlng = (
-            (click_data or {}).get("latlng") if isinstance(click_data, dict) else None
-        )
+        latlng = (click_data or {}).get("latlng") if isinstance(click_data, dict) else None
         if not latlng:
             raise PreventUpdate
         try:
@@ -1439,10 +1202,7 @@ def load_terrain_patch(
     lat = safe_float(lat_value)
     lon = safe_float(lon_value)
     if lat is None or lon is None:
-        status = html.Span(
-            "Provide valid latitude and longitude before loading.",
-            style={"color": "#f87171"},
-        )
+        status = html.Span("Provide valid latitude and longitude before loading.", style={"color": "#f87171"})
         return dash.no_update, status, dash.no_update
     lat = float(lat)
     lon = float(lon)
@@ -1498,27 +1258,27 @@ def capture_terrain_snapshot(
     # Use the current figure to preserve camera angle and view
     if current_figure:
         figure = go.Figure(current_figure)
-
+        
         # Apply the stored camera state to preserve the current view
-        if camera_state and "scene" in figure.layout:
+        if camera_state and 'scene' in figure.layout:
             figure.layout.scene.camera = camera_state
     else:
         # Fallback to building a new figure if current figure is not available
         figure = build_terrain_figure(data, float(exaggeration or 1.0))
-
+    
     ensure_snapshot_directory()
-
+    
     # Check if there's an existing snapshot to replace
     existing_snapshot_data = snapshot_data or {}
     existing_snapshot_path = existing_snapshot_data.get("path")
-
+    
     if existing_snapshot_path and snapshot_exists(existing_snapshot_path):
         # Reuse the existing filename to replace the old snapshot
         snapshot_key = existing_snapshot_path
     else:
         # Create a new unique filename
         snapshot_key = build_snapshot_filename()
-
+    
     output_path = resolve_snapshot_path(snapshot_key)
     try:
         image_bytes = pio.to_image(figure, format="png", scale=1)
@@ -1544,9 +1304,7 @@ def capture_terrain_snapshot(
         )
         return dash.no_update, dash.no_update, dash.no_update, status
 
-    center = (
-        data.get("center", [None, None]) if isinstance(data, dict) else [None, None]
-    )
+    center = data.get("center", [None, None]) if isinstance(data, dict) else [None, None]
     lat, lon = center if isinstance(center, (list, tuple)) else (None, None)
     if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
         message = f"Captured terrain snapshot at lat {lat:.2f}, lon {lon:.2f}."
@@ -1606,9 +1364,7 @@ def pan_probe_marker(
             base_lat = safe_float(probe.get("lat"))
             base_lon = safe_float(probe.get("lon"))
     if base_lat is None or base_lon is None:
-        status = html.Span(
-            "Select or place a marker before panning.", style={"color": "#facc15"}
-        )
+        status = html.Span("Select or place a marker before panning.", style={"color": "#facc15"})
         return dash.no_update, dash.no_update, status, dash.no_update
 
     current_lat = float(base_lat)
@@ -1618,10 +1374,7 @@ def pan_probe_marker(
     new_lon = max(-180.0, min(180.0, current_lon + float(delta_lon)))
 
     if new_lat == current_lat and new_lon == current_lon:
-        status = html.Span(
-            "Reached coordinate boundary; try a different direction.",
-            style={"color": "#f97316"},
-        )
+        status = html.Span("Reached coordinate boundary; try a different direction.", style={"color": "#f97316"})
         return dash.no_update, dash.no_update, status, dash.no_update
 
     view_size_value = safe_float(patch_size)
@@ -1655,9 +1408,7 @@ def pan_probe_marker(
         }
 
     prefetch_request: Any = dash.no_update
-    cached_payload = reuse_cached_terrain_patch(
-        terrain_data, new_lat, new_lon, view_size
-    )
+    cached_payload = reuse_cached_terrain_patch(terrain_data, new_lat, new_lon, view_size)
     if cached_payload is not None:
         elevation = sample_patch_elevation(cached_payload, new_lat, new_lon)
         if elevation is None:
@@ -1690,7 +1441,6 @@ def pan_probe_marker(
         status,
         prefetch_request,
     )
-
 
 @app.callback(
     Output("terrain-store", "data", allow_duplicate=True),
@@ -1725,13 +1475,16 @@ def fulfill_terrain_prefetch(request: Optional[Dict[str, Any]]):
     )
     return payload, status, None
 
-
 @app.callback(
     Output("click-readout", "children"),
     Input("probe-store", "data"),
 )
 def render_probe_readout(probe: Optional[Dict[str, Any]]):
     return build_probe_message(probe)
+
+
+
+
 
 
 @app.callback(
@@ -1815,33 +1568,14 @@ def render_snapshot_modal(data: Optional[Dict[str, Any]]):
         if time_value:
             subtitle_parts.append(str(time_value))
         if subtitle_parts:
-            meta.append(
-                html.P(
-                    " | ".join(subtitle_parts),
-                    style={"opacity": 0.75, "marginBottom": "0.4rem"},
-                )
-            )
+            meta.append(html.P(" | ".join(subtitle_parts), style={"opacity": 0.75, "marginBottom": "0.4rem"}))
         lat = data.get("lat")
         lon = data.get("lon")
         if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
-            meta.append(
-                html.P(
-                    f"Lat {lat:.2f}, Lon {lon:.2f}",
-                    style={"opacity": 0.75, "marginBottom": "0.6rem"},
-                )
-            )
+            meta.append(html.P(f"Lat {lat:.2f}, Lon {lon:.2f}", style={"opacity": 0.75, "marginBottom": "0.6rem"}))
         notes = data.get("notes")
         if notes:
-            meta.append(
-                html.P(
-                    str(notes),
-                    style={
-                        "fontSize": "0.9rem",
-                        "opacity": 0.85,
-                        "marginBottom": "0.8rem",
-                    },
-                )
-            )
+            meta.append(html.P(str(notes), style={"fontSize": "0.9rem", "opacity": 0.85, "marginBottom": "0.8rem"}))
 
         gallery: List[Any] = [
             html.Img(
@@ -1883,7 +1617,7 @@ def render_snapshot_modal(data: Optional[Dict[str, Any]]):
                 },
             )
         )
-
+        
         # Add interactive SAM viewer button if available
         if SAM_VIEWER_AVAILABLE:
             controls.insert(
@@ -1909,12 +1643,7 @@ def render_snapshot_modal(data: Optional[Dict[str, Any]]):
             ),
             html.Div(
                 controls,
-                style={
-                    "display": "flex",
-                    "gap": "0.6rem",
-                    "justifyContent": "center",
-                    "marginTop": "1rem",
-                },
+                style={"display": "flex", "gap": "0.6rem", "justifyContent": "center", "marginTop": "1rem"},
             ),
         ]
 
@@ -1990,19 +1719,15 @@ def close_snapshot_modal(n_clicks):
         raise PreventUpdate
     return None
 
-
 @app.callback(
     Output("terrain-graph", "figure"),
     Input("terrain-store", "data"),
     Input("terrain-exaggeration-slider", "value"),
 )
-def render_terrain(
-    data: Optional[Dict[str, Any]], exaggeration: Optional[float]
-) -> go.Figure:
+def render_terrain(data: Optional[Dict[str, Any]], exaggeration: Optional[float]) -> go.Figure:
     if not data:
         return build_empty_terrain_figure()
     return build_terrain_figure(data, float(exaggeration or 1.0))
-
 
 @app.callback(
     Output("terrain-camera-store", "data"),
@@ -2011,8 +1736,8 @@ def render_terrain(
 )
 def capture_camera_state(relayout_data: Optional[Dict[str, Any]]):
     """Capture the current camera state for snapshot preservation."""
-    if relayout_data and "scene.camera" in relayout_data:
-        return relayout_data["scene.camera"]
+    if relayout_data and 'scene.camera' in relayout_data:
+        return relayout_data['scene.camera']
     return dash.no_update
 
 
@@ -2094,15 +1819,7 @@ def save_feature(
 
     if errors:
         message = html.Span(" | ".join(errors), style={"color": "#f87171"})
-        return (
-            current_features or [],
-            message,
-            edit_index,
-            name,
-            notes,
-            snapshot_data,
-            sam_data,
-        )
+        return current_features or [], message, edit_index, name, notes, snapshot_data, sam_data
 
     observation_title = "MOLA global"
     observation_date = "Global"
@@ -2112,14 +1829,14 @@ def save_feature(
         observation_date = obs.get("date", observation_date)
 
     feature_data = {
-        "name": str(name).strip(),
-        "lat": lat_val,
-        "lon": lon_val,
-        "notes": str(notes).strip() if notes else "",
-        "time": observation_date,
-        "source": "user",
-        "dataset": observation_title,
-    }
+            "name": str(name).strip(),
+            "lat": lat_val,
+            "lon": lon_val,
+            "notes": str(notes).strip() if notes else "",
+            "time": observation_date,
+            "source": "user",
+            "dataset": observation_title,
+        }
     if probe and isinstance(probe, dict):
         feature_data["elevation"] = probe.get("elevation")
 
@@ -2145,7 +1862,7 @@ def save_feature(
     else:
         updated.append(feature_data)
     message = html.Span(
-        f"Saved feature '{feature_data['name']}' at {lat_val:.2f}N, {lon_val:.2f}E",
+            f"Saved feature '{feature_data['name']}' at {lat_val:.2f}N, {lon_val:.2f}E",
         style={"color": "#34d399"},
     )
     persist_feature_collection(updated)
@@ -2173,14 +1890,7 @@ def render_feature_layers(features: Sequence[Dict[str, Any]]):
                     "View",
                     id={"type": "feature-view", "index": idx},
                     n_clicks=0,
-                    style={
-                        "flex": "1",
-                        "padding": "0.35rem",
-                        "backgroundColor": "#14b8a6",
-                        "color": "#0f172a",
-                        "border": "none",
-                        "borderRadius": "0.3rem",
-                    },
+                    style={"flex": "1", "padding": "0.35rem", "backgroundColor": "#14b8a6", "color": "#0f172a", "border": "none", "borderRadius": "0.3rem"},
                 )
             )
         buttons.append(
@@ -2188,14 +1898,7 @@ def render_feature_layers(features: Sequence[Dict[str, Any]]):
                 "Edit",
                 id={"type": "feature-edit", "index": idx},
                 n_clicks=0,
-                style={
-                    "flex": "1",
-                    "padding": "0.35rem",
-                    "backgroundColor": "#2563eb",
-                    "color": "#e2e8f0",
-                    "border": "none",
-                    "borderRadius": "0.3rem",
-                },
+                style={"flex": "1", "padding": "0.35rem", "backgroundColor": "#2563eb", "color": "#e2e8f0", "border": "none", "borderRadius": "0.3rem"},
             )
         )
         buttons.append(
@@ -2203,42 +1906,29 @@ def render_feature_layers(features: Sequence[Dict[str, Any]]):
                 "Delete",
                 id={"type": "feature-delete", "index": idx},
                 n_clicks=0,
-                style={
-                    "flex": "1",
-                    "padding": "0.35rem",
-                    "backgroundColor": "#dc2626",
-                    "color": "#f8fafc",
-                    "border": "none",
-                    "borderRadius": "0.3rem",
-                },
+                style={"flex": "1", "padding": "0.35rem", "backgroundColor": "#dc2626", "color": "#f8fafc", "border": "none", "borderRadius": "0.3rem"},
             )
         )
         cards.append(
             html.Div(
                 [
-                    html.Div(
-                        [
-                            html.Strong(feature.get("name", "Feature")),
-                            html.Span(
-                                f"Lat {feature.get('lat', 0):.2f}, Lon {feature.get('lon', 0):.2f}",
-                                style={"fontSize": "0.9rem", "opacity": 0.8},
-                            ),
-                            html.Span(
-                                f"Observed: {feature.get('time', 'N/A')} - {feature.get('dataset', 'Dataset')}",
-                                style={"fontSize": "0.8rem", "opacity": 0.7},
-                            ),
-                            html.Span(
-                                feature.get("notes", ""), style={"fontSize": "0.8rem"}
-                            ),
+            html.Div(
+                [
+                    html.Strong(feature.get("name", "Feature")),
+                    html.Span(
+                        f"Lat {feature.get('lat', 0):.2f}, Lon {feature.get('lon', 0):.2f}",
+                        style={"fontSize": "0.9rem", "opacity": 0.8},
+                    ),
+                    html.Span(
+                        f"Observed: {feature.get('time', 'N/A')} - {feature.get('dataset', 'Dataset')}",
+                        style={"fontSize": "0.8rem", "opacity": 0.7},
+                    ),
+                    html.Span(feature.get("notes", ""), style={"fontSize": "0.8rem"}),
                         ]
                     ),
                     html.Div(
                         buttons,
-                        style={
-                            "display": "flex",
-                            "gap": "0.5rem",
-                            "marginTop": "0.6rem",
-                        },
+                        style={"display": "flex", "gap": "0.5rem", "marginTop": "0.6rem"},
                     ),
                 ],
                 style={
@@ -2340,10 +2030,7 @@ def on_feature_delete(n_clicks, features, edit_index):
         raise PreventUpdate
     updated = list(features)
     removed = updated.pop(index)
-    message = html.Span(
-        f"Deleted feature '{removed.get('name', 'Feature')}'.",
-        style={"color": "#f97316"},
-    )
+    message = html.Span(f"Deleted feature '{removed.get('name', 'Feature')}'.", style={"color": "#f97316"})
     new_edit_index = edit_index
     if isinstance(edit_index, int):
         if edit_index == index:
@@ -2365,21 +2052,23 @@ def open_sam_viewer(n_clicks, snapshot_data):
     """Open SAM viewer when analysis button is clicked."""
     if not n_clicks or not snapshot_data:
         raise PreventUpdate
-
+    
     if not SAM_VIEWER_AVAILABLE:
         raise PreventUpdate
-
+    
     # Get the image data URI
     snapshot_key = snapshot_data.get("path")
     if not snapshot_key:
         raise PreventUpdate
-
+    
     data_uri = encode_snapshot_to_data_uri(snapshot_key)
     if not data_uri:
         raise PreventUpdate
-
-    return {"image_data": data_uri, "feature_info": snapshot_data}
-
+    
+    return {
+        "image_data": data_uri,
+        "feature_info": snapshot_data
+    }
 
 @app.callback(
     Output("sam-viewer-modal", "children"),
@@ -2390,21 +2079,20 @@ def render_sam_viewer_modal(data):
     """Render the SAM viewer modal."""
     if not data or not isinstance(data, dict):
         return [], {"display": "none"}
-
+    
     if not SAM_VIEWER_AVAILABLE:
         return [], {"display": "none"}
-
+    
     image_data = data.get("image_data")
     feature_info = data.get("feature_info", {})
-
+    
     if not image_data:
         return [], {"display": "none"}
-
+    
     modal_content = create_sam_viewer_modal(image_data, feature_info)
     modal_style = {"display": "block"}
-
+    
     return modal_content, modal_style
-
 
 @app.callback(
     Output("sam-viewer-store", "data", allow_duplicate=True),
@@ -2417,11 +2105,16 @@ def close_sam_viewer(n_clicks):
         raise PreventUpdate
     return None
 
-
 # Set up SAM callbacks if available
 if SAM_VIEWER_AVAILABLE:
     setup_sam_callbacks(app)
 
 
 if __name__ == "__main__":
-    app.run(debug=False, host="0.0.0.0", port="8000")
+    app.run(host='0.0.0.0', port=int(os.getenv("PORT", 8050)), debug=False)
+
+
+
+
+
+
