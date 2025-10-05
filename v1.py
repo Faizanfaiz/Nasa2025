@@ -37,7 +37,26 @@ DEFAULT_TERRAIN_PATCH_DEGREES = 4.0
 TERRAIN_PIXEL_RESOLUTION = 160
 MOLA_NODATA_THRESHOLD = -1e20
 
+TERRAIN_PAN_STEP_DEGREES = 0.25
+TERRAIN_PAN_OFFSETS = {
+    "terrain-pan-north": (TERRAIN_PAN_STEP_DEGREES, 0.0),
+    "terrain-pan-south": (-TERRAIN_PAN_STEP_DEGREES, 0.0),
+    "terrain-pan-east": (0.0, TERRAIN_PAN_STEP_DEGREES),
+    "terrain-pan-west": (0.0, -TERRAIN_PAN_STEP_DEGREES),
+}
+TERRAIN_PAN_LABELS = {
+    "terrain-pan-north": "north",
+    "terrain-pan-south": "south",
+    "terrain-pan-east": "east",
+    "terrain-pan-west": "west",
+}
+
 REQUEST_HEADERS = {"User-Agent": USER_AGENT}
+TERRAIN_PAN_BUFFER_DEGREES = 1.0
+TERRAIN_PAN_MARGIN_DEGREES = 0.05
+TERRAIN_MAX_PIXEL_RESOLUTION = 384
+TERRAIN_MAX_PATCH_DEGREES = 14.0
+
 
 REFERENCE_FEATURES: List[Dict[str, Any]] = [
     {
@@ -87,6 +106,14 @@ def safe_float(value: Any) -> Optional[float]:
 def get_dynamic_callback_index(expected_type: str) -> Optional[int]:
     """Return the triggered index for a Dash pattern-matching callback."""
     ctx = dash.callback_context
+    triggered_id = getattr(ctx, "triggered_id", None)
+    if isinstance(triggered_id, dict):
+        if triggered_id.get("type") == expected_type:
+            try:
+                return int(triggered_id.get("index"))
+            except (TypeError, ValueError):
+                return None
+        return None
     if not ctx.triggered:
         return None
     prop_id = ctx.triggered[0]["prop_id"].split(".")[0]
@@ -98,7 +125,10 @@ def get_dynamic_callback_index(expected_type: str) -> Optional[int]:
         return None
     if trigger.get("type") != expected_type:
         return None
-    return trigger.get("index")
+    try:
+        return int(trigger.get("index"))
+    except (TypeError, ValueError):
+        return None
 
 
 @lru_cache(maxsize=128)
@@ -340,7 +370,130 @@ def fetch_mola_patch(lat: float, lon: float, size_deg: float, pixels: int) -> Di
         "longitudes": longitudes.tolist(),
         "elevations": elevation.tolist(),
         "center": [lat, lon],
+        "lat_extent": [float(latitudes.min()), float(latitudes.max())],
+        "lon_extent": [float(longitudes.min()), float(longitudes.max())],
+        "size": float(size_deg),
+        "pixels": int(elevation.shape[0]),
     }
+
+
+def determine_raw_patch_request(view_size: float) -> tuple[float, int]:
+    view = max(float(view_size), 0.5)
+    raw_size = min(max(view + 2.0 * TERRAIN_PAN_BUFFER_DEGREES, view * 1.5), TERRAIN_MAX_PATCH_DEGREES)
+    scale = max(raw_size / view, 1.0)
+    pixels = int(min(TERRAIN_PIXEL_RESOLUTION * scale, TERRAIN_MAX_PIXEL_RESOLUTION))
+    pixels = max(pixels, TERRAIN_PIXEL_RESOLUTION)
+    return raw_size, pixels
+
+
+def extract_view_from_raw_patch(
+    raw_patch: Dict[str, Any],
+    center_lat: float,
+    center_lon: float,
+    view_size: float,
+) -> Optional[Dict[str, Any]]:
+    latitudes = np.array(raw_patch.get("latitudes", []), dtype=float)
+    longitudes = np.array(raw_patch.get("longitudes", []), dtype=float)
+    elevations = np.array(raw_patch.get("elevations", []), dtype=float)
+    if latitudes.size == 0 or longitudes.size == 0 or elevations.size == 0:
+        return None
+    half = max(float(view_size), 0.2) / 2.0
+    lat_min = center_lat - half
+    lat_max = center_lat + half
+    lon_min = center_lon - half
+    lon_max = center_lon + half
+    lat_mask = (latitudes >= lat_min - TERRAIN_PAN_MARGIN_DEGREES) & (latitudes <= lat_max + TERRAIN_PAN_MARGIN_DEGREES)
+    lon_mask = (longitudes >= lon_min - TERRAIN_PAN_MARGIN_DEGREES) & (longitudes <= lon_max + TERRAIN_PAN_MARGIN_DEGREES)
+    if not np.any(lat_mask) or not np.any(lon_mask):
+        return None
+    lat_indices = np.where(lat_mask)[0]
+    lon_indices = np.where(lon_mask)[0]
+    if lat_indices.size < 2 or lon_indices.size < 2:
+        return None
+    subset_elev = elevations[np.ix_(lat_indices, lon_indices)]
+    subset_lat = latitudes[lat_indices]
+    subset_lon = longitudes[lon_indices]
+    return {
+        "latitudes": subset_lat.tolist(),
+        "longitudes": subset_lon.tolist(),
+        "elevations": subset_elev.tolist(),
+        "center": [center_lat, center_lon],
+    }
+
+
+def within_cached_bounds(
+    raw_patch: Dict[str, Any],
+    center_lat: float,
+    center_lon: float,
+    view_size: float,
+) -> bool:
+    lat_extent = raw_patch.get("lat_extent")
+    lon_extent = raw_patch.get("lon_extent")
+    if not lat_extent or not lon_extent:
+        return False
+    half = max(float(view_size), 0.2) / 2.0
+    margin = TERRAIN_PAN_MARGIN_DEGREES
+    min_lat, max_lat = float(min(lat_extent)), float(max(lat_extent))
+    min_lon, max_lon = float(min(lon_extent)), float(max(lon_extent))
+    return (
+        min_lat + margin <= center_lat - half
+        and max_lat - margin >= center_lat + half
+        and min_lon + margin <= center_lon - half
+        and max_lon - margin >= center_lon + half
+    )
+
+
+def build_terrain_payload(
+    lat: float,
+    lon: float,
+    view_size: float,
+) -> Dict[str, Any]:
+    raw_size, raw_pixels = determine_raw_patch_request(view_size)
+    raw_patch = fetch_mola_patch(lat, lon, raw_size, raw_pixels)
+    raw_patch["center"] = [lat, lon]
+    raw_patch["requested_view_size"] = float(view_size)
+    view_patch = extract_view_from_raw_patch(raw_patch, lat, lon, view_size)
+    if view_patch is None:
+        raise RuntimeError("Failed to derive terrain window from fetched patch")
+    view_patch["view_size"] = float(view_size)
+    view_patch["raw"] = raw_patch
+    return view_patch
+
+
+def reuse_cached_terrain_patch(
+    cached: Optional[Dict[str, Any]],
+    lat: float,
+    lon: float,
+    view_size: float,
+) -> Optional[Dict[str, Any]]:
+    if not isinstance(cached, dict):
+        return None
+    raw_patch = cached.get("raw") if isinstance(cached.get("raw"), dict) else None
+    if not raw_patch:
+        return None
+    if not within_cached_bounds(raw_patch, lat, lon, view_size):
+        return None
+    view_patch = extract_view_from_raw_patch(raw_patch, lat, lon, view_size)
+    if view_patch is None:
+        return None
+    view_patch["view_size"] = float(view_size)
+    view_patch["raw"] = raw_patch
+    return view_patch
+
+
+
+def sample_patch_elevation(patch: Dict[str, Any], lat: float, lon: float) -> Optional[float]:
+    latitudes = np.array(patch.get("latitudes", []), dtype=float)
+    longitudes = np.array(patch.get("longitudes", []), dtype=float)
+    elevations = np.array(patch.get("elevations", []), dtype=float)
+    if latitudes.size == 0 or longitudes.size == 0 or elevations.size == 0:
+        return None
+    lat_idx = int(np.abs(latitudes - float(lat)).argmin())
+    lon_idx = int(np.abs(longitudes - float(lon)).argmin())
+    try:
+        return float(elevations[lat_idx, lon_idx])
+    except (IndexError, ValueError, TypeError):
+        return None
 
 
 def build_empty_terrain_figure() -> go.Figure:
@@ -589,6 +742,16 @@ app.layout = html.Div(
                                             step=0.05,
                                             placeholder="-180 to 180",
                                             style={"width": "100%"},
+                                        ),
+                                        html.Div(
+                                            [
+                                                html.Button("^", id="terrain-pan-north", n_clicks=0, style={"gridColumn": "2", "padding": "0.65rem 0.45rem", "fontSize": "1.6rem", "backgroundColor": "#0f172a", "color": "#f8fafc", "border": "1px solid #334155", "borderRadius": "0.5rem", "minWidth": "3.2rem", "minHeight": "3.2rem"}, title="Pan marker north"),
+                                                html.Button("<", id="terrain-pan-west", n_clicks=0, style={"gridRow": "2", "gridColumn": "1", "padding": "0.65rem 0.45rem", "fontSize": "1.6rem", "backgroundColor": "#0f172a", "color": "#f8fafc", "border": "1px solid #334155", "borderRadius": "0.5rem", "minWidth": "3.2rem", "minHeight": "3.2rem"}, title="Pan marker west"),
+                                                html.Div("Pan terrain", style={"gridRow": "2", "gridColumn": "2", "fontSize": "0.85rem", "opacity": 0.8, "alignSelf": "center"}),
+                                                html.Button(">", id="terrain-pan-east", n_clicks=0, style={"gridRow": "2", "gridColumn": "3", "padding": "0.65rem 0.45rem", "fontSize": "1.6rem", "backgroundColor": "#0f172a", "color": "#f8fafc", "border": "1px solid #334155", "borderRadius": "0.5rem", "minWidth": "3.2rem", "minHeight": "3.2rem"}, title="Pan marker east"),
+                                                html.Button("v", id="terrain-pan-south", n_clicks=0, style={"gridRow": "3", "gridColumn": "2", "padding": "0.65rem 0.45rem", "fontSize": "1.6rem", "backgroundColor": "#0f172a", "color": "#f8fafc", "border": "1px solid #334155", "borderRadius": "0.5rem", "minWidth": "3.2rem", "minHeight": "3.2rem"}, title="Pan marker south"),
+                                            ],
+                                            style={"display": "grid", "gridTemplateColumns": "repeat(3, minmax(0, 1fr))", "gridTemplateRows": "repeat(3, auto)", "gap": "0.3rem", "marginTop": "0.35rem", "justifyItems": "center"},
                                         ),
                                         html.Div(
                                             [
@@ -875,7 +1038,7 @@ def sync_probe_targets(probe: Optional[Dict[str, Any]]):
 
 
 @app.callback(
-    Output("terrain-store", "data"),
+    Output("terrain-store", "data", allow_duplicate=True),
     Output("terrain-status", "children", allow_duplicate=True),
     Output("probe-store", "data", allow_duplicate=True),
     Input("terrain-load-btn", "n_clicks"),
@@ -901,33 +1064,114 @@ def load_terrain_patch(
         return dash.no_update, status, dash.no_update
     lat = float(lat)
     lon = float(lon)
-    size = float(patch_size or DEFAULT_TERRAIN_PATCH_DEGREES)
+    view_size = float(patch_size or DEFAULT_TERRAIN_PATCH_DEGREES)
     try:
-        patch = fetch_mola_patch(lat, lon, size, TERRAIN_PIXEL_RESOLUTION)
+        payload = build_terrain_payload(lat, lon, view_size)
     except RuntimeError as exc:
         status = html.Span(str(exc), style={"color": "#f87171"})
         return dash.no_update, status, dash.no_update
-    latitudes = patch.get("latitudes", [])
-    longitudes = patch.get("longitudes", [])
+    latitudes = payload.get("latitudes", [])
+    longitudes = payload.get("longitudes", [])
     status = html.Span(
         f"Loaded terrain patch {len(latitudes)}x{len(longitudes)} around lat {lat:.2f} deg, lon {lon:.2f} deg",
         style={"color": "#34d399"},
     )
-    elevation = None
-    if probe and isinstance(probe, dict):
-        probe_lat = safe_float(probe.get("lat"))
-        probe_lon = safe_float(probe.get("lon"))
-        if (
-            probe_lat is not None
-            and probe_lon is not None
-            and abs(probe_lat - lat) < 1e-6
-            and abs(probe_lon - lon) < 1e-6
-        ):
-            elevation = safe_float(probe.get("elevation"))
+    elevation = sample_patch_elevation(payload, lat, lon)
     if elevation is None:
         elevation = fetch_mola_elevation(lat, lon)
     updated_probe = {"lat": lat, "lon": lon, "elevation": elevation}
-    return patch, status, updated_probe
+    return payload, status, updated_probe
+
+
+@app.callback(
+    Output("terrain-store", "data", allow_duplicate=True),
+    Output("probe-store", "data", allow_duplicate=True),
+    Output("terrain-status", "children", allow_duplicate=True),
+    Input("terrain-pan-north", "n_clicks"),
+    Input("terrain-pan-south", "n_clicks"),
+    Input("terrain-pan-east", "n_clicks"),
+    Input("terrain-pan-west", "n_clicks"),
+    State("probe-store", "data"),
+    State("terrain-lat-input", "value"),
+    State("terrain-lon-input", "value"),
+    State("terrain-size-slider", "value"),
+    State("terrain-store", "data"),
+    prevent_initial_call=True,
+)
+def pan_probe_marker(
+    north_clicks: Optional[int],
+    south_clicks: Optional[int],
+    east_clicks: Optional[int],
+    west_clicks: Optional[int],
+    probe: Optional[Dict[str, Any]],
+    lat_value: Any,
+    lon_value: Any,
+    patch_size: Optional[float],
+    terrain_data: Optional[Dict[str, Any]],
+):
+    ctx = dash.callback_context
+    triggered_id = getattr(ctx, "triggered_id", None)
+    button_id: Optional[str] = None
+    if isinstance(triggered_id, str):
+        button_id = triggered_id
+    elif isinstance(triggered_id, dict):
+        button_id = triggered_id.get("id")
+    if not button_id and ctx.triggered:
+        button_id = ctx.triggered[0]["prop_id"].split(".")[0]
+    if button_id not in TERRAIN_PAN_OFFSETS:
+        raise PreventUpdate
+
+    base_lat = safe_float(lat_value)
+    base_lon = safe_float(lon_value)
+    if base_lat is None or base_lon is None:
+        if isinstance(probe, dict):
+            base_lat = safe_float(probe.get("lat"))
+            base_lon = safe_float(probe.get("lon"))
+    if base_lat is None or base_lon is None:
+        status = html.Span("Select or place a marker before panning.", style={"color": "#facc15"})
+        return dash.no_update, dash.no_update, status
+
+    current_lat = float(base_lat)
+    current_lon = float(base_lon)
+    delta_lat, delta_lon = TERRAIN_PAN_OFFSETS[button_id]
+    new_lat = max(-90.0, min(90.0, current_lat + float(delta_lat)))
+    new_lon = max(-180.0, min(180.0, current_lon + float(delta_lon)))
+
+    if new_lat == current_lat and new_lon == current_lon:
+        status = html.Span("Reached coordinate boundary; try a different direction.", style={"color": "#f97316"})
+        return dash.no_update, dash.no_update, status
+
+    view_size_value = safe_float(patch_size)
+    if view_size_value is None and isinstance(terrain_data, dict):
+        view_size_value = safe_float(terrain_data.get("view_size"))
+    if view_size_value is None:
+        view_size_value = DEFAULT_TERRAIN_PATCH_DEGREES
+    view_size = float(view_size_value)
+    cached_payload = reuse_cached_terrain_patch(terrain_data, new_lat, new_lon, view_size)
+    used_cache = cached_payload is not None
+
+    if cached_payload is None:
+        try:
+            cached_payload = build_terrain_payload(new_lat, new_lon, view_size)
+        except RuntimeError as exc:
+            elevation = sample_patch_elevation(terrain_data or {}, new_lat, new_lon)
+            if elevation is None:
+                elevation = fetch_mola_elevation(new_lat, new_lon)
+            status = html.Span(
+                f"Moved marker {TERRAIN_PAN_LABELS[button_id]}, but terrain load failed: {exc}",
+                style={"color": "#f87171"},
+            )
+            return dash.no_update, {"lat": new_lat, "lon": new_lon, "elevation": elevation}, status
+
+    elevation = sample_patch_elevation(cached_payload, new_lat, new_lon)
+    if elevation is None:
+        elevation = fetch_mola_elevation(new_lat, new_lon)
+    status_text = (
+        f"Moved marker {TERRAIN_PAN_LABELS[button_id]} by {TERRAIN_PAN_STEP_DEGREES:.2f} deg using cached terrain." if used_cache else
+        f"Moved marker {TERRAIN_PAN_LABELS[button_id]} by {TERRAIN_PAN_STEP_DEGREES:.2f} deg and refreshed terrain."
+    )
+    status = html.Span(status_text, style={"color": "#38bdf8"})
+    return cached_payload, {"lat": new_lat, "lon": new_lon, "elevation": elevation}, status
 
 
 @app.callback(
