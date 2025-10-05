@@ -1,0 +1,39 @@
+[
+  {
+    "name": "Olympus Mons",
+    "lat": 18.65,
+    "lon": -133.8,
+    "notes": "Reference peak for scale.",
+    "time": "Global",
+    "source": "reference",
+    "dataset": "MOLA"
+  },
+  {
+    "name": "Valles Marineris",
+    "lat": -14,
+    "lon": -65,
+    "notes": "Canyon network stretching nearly 4,000 km.",
+    "time": "Global",
+    "source": "reference",
+    "dataset": "MOLA"
+  },
+  {
+    "name": "Gale Crater",
+    "lat": -5.4,
+    "lon": 137.8,
+    "notes": "Curiosity rover landing site.",
+    "time": "Global",
+    "source": "reference",
+    "dataset": "MOLA"
+  },
+  {
+    "name": "wretyhj",
+    "lat": -27.60029769058589,
+    "lon": -23.818359375000004,
+    "notes": "esgdhj",
+    "time": "Global",
+    "source": "user",
+    "dataset": "MOLA global",
+    "elevation": -140.4318389892578
+  }
+]

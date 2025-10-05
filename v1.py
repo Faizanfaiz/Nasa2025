@@ -23,6 +23,14 @@ from dash.dependencies import ALL
 from dash.exceptions import PreventUpdate
 import dash_leaflet as dl
 
+# SAM integration imports
+try:
+    from sam_viewer import create_sam_viewer_modal, setup_sam_callbacks
+    SAM_VIEWER_AVAILABLE = True
+except ImportError:
+    SAM_VIEWER_AVAILABLE = False
+    print("SAM viewer not available - check sam_viewer.py")
+
 MOLA_TILE_TEMPLATE = (
     "https://trek.nasa.gov/tiles/Mars/EQ/"
     "Mars_MGS_MOLA_ClrShade_merge_global_463m/1.0.0/default/default028mm/{z}/{y}/{x}.jpg"
@@ -986,7 +994,9 @@ app.layout = html.Div(
         dcc.Store(id="snapshot-view-store", storage_type="memory"),
         dcc.Store(id="feature-edit-index", storage_type="memory"),
         dcc.Store(id="feature-store", storage_type="memory", data=load_initial_feature_collection()),
+        dcc.Store(id="sam-viewer-store", storage_type="memory"),
         html.Div(id="snapshot-modal", style={"display": "none"}),
+        html.Div(id="sam-viewer-modal", style={"display": "none"}),
     ],
     style={
         "maxWidth": "1200px",
@@ -1220,12 +1230,14 @@ def load_terrain_patch(
     Input("terrain-capture-btn", "n_clicks"),
     State("terrain-store", "data"),
     State("terrain-exaggeration-slider", "value"),
+    State("terrain-graph", "figure"),
     prevent_initial_call=True,
 )
 def capture_terrain_snapshot(
     n_clicks: Optional[int],
     data: Optional[Dict[str, Any]],
     exaggeration: Optional[float],
+    current_figure: Optional[Dict[str, Any]],
 ):
     if not n_clicks:
         raise PreventUpdate
@@ -1236,7 +1248,13 @@ def capture_terrain_snapshot(
         )
         return dash.no_update, dash.no_update, dash.no_update, status
 
-    figure = build_terrain_figure(data, float(exaggeration or 1.0))
+    # Use the current figure to preserve camera angle and view
+    if current_figure:
+        figure = go.Figure(current_figure)
+    else:
+        # Fallback to building a new figure if current figure is not available
+        figure = build_terrain_figure(data, float(exaggeration or 1.0))
+    
     ensure_snapshot_directory()
     snapshot_key = build_snapshot_filename()
     output_path = resolve_snapshot_path(snapshot_key)
@@ -1592,6 +1610,24 @@ def render_snapshot_modal(data: Optional[Dict[str, Any]]):
                 },
             ),
         )
+        
+        # Add interactive SAM viewer button if available
+        if SAM_VIEWER_AVAILABLE:
+            controls.insert(
+                0,
+                html.Button(
+                    "🔍 Interactive SAM Analysis",
+                    id="sam-analysis-btn",
+                    n_clicks=0,
+                    style={
+                        "padding": "0.45rem 1rem",
+                        "border": "none",
+                        "borderRadius": "0.35rem",
+                        "backgroundColor": "#059669",
+                        "color": "#e2e8f0",
+                    },
+                ),
+            )
 
         body_children = meta + [
             html.Div(
@@ -1634,7 +1670,6 @@ def render_snapshot_modal(data: Optional[Dict[str, Any]]):
 @app.callback(
     Output("sam-annotation-store", "data"),
     Output("snapshot-view-store", "data", allow_duplicate=True),
-    Output("terrain-status", "children", allow_duplicate=True),
     Input("snapshot-sam-btn", "n_clicks"),
     State("snapshot-view-store", "data"),
     prevent_initial_call=True,
@@ -1652,26 +1687,19 @@ def run_snapshot_segmentation(
 
     snapshot_path = resolve_snapshot_path(snapshot_key)
     if not snapshot_path.exists():
-        status = html.Span(
-            "Snapshot file missing on disk; capture a new snapshot before running SAM.",
-            style={"color": "#f97316"},
-        )
-        return dash.no_update, dash.no_update, status
+        # Return without updating terrain-status
+        return dash.no_update, dash.no_update
 
     try:
         annotation_key = run_sam_annotation(snapshot_path)
     except RuntimeError as exc:
-        status = html.Span(str(exc), style={"color": "#f87171"})
-        return dash.no_update, dash.no_update, status
+        # Return error without updating terrain-status
+        return dash.no_update, dash.no_update
 
     updated_view = dict(view_data)
     updated_view["annotation_path"] = annotation_key
     annotation_payload = {"path": annotation_key}
-    status = html.Span(
-        "SAM segmentation completed.",
-        style={"color": "#34d399"},
-    )
-    return annotation_payload, updated_view, status
+    return annotation_payload, updated_view
 
 
 @app.callback(
@@ -1993,6 +2021,75 @@ def on_feature_delete(n_clicks, features, edit_index):
             new_edit_index = edit_index - 1
     persist_feature_collection(updated)
     return updated, message, new_edit_index
+
+
+# SAM Interactive Viewer Callbacks
+@app.callback(
+    Output("sam-viewer-store", "data"),
+    Input("sam-analysis-btn", "n_clicks"),
+    State("snapshot-view-store", "data"),
+    prevent_initial_call=True,
+)
+def open_sam_viewer(n_clicks, snapshot_data):
+    """Open SAM viewer when analysis button is clicked."""
+    if not n_clicks or not snapshot_data:
+        raise PreventUpdate
+    
+    if not SAM_VIEWER_AVAILABLE:
+        raise PreventUpdate
+    
+    # Get the image data URI
+    snapshot_key = snapshot_data.get("path")
+    if not snapshot_key:
+        raise PreventUpdate
+    
+    data_uri = encode_snapshot_to_data_uri(snapshot_key)
+    if not data_uri:
+        raise PreventUpdate
+    
+    return {
+        "image_data": data_uri,
+        "feature_info": snapshot_data
+    }
+
+@app.callback(
+    Output("sam-viewer-modal", "children"),
+    Output("sam-viewer-modal", "style"),
+    Input("sam-viewer-store", "data"),
+)
+def render_sam_viewer_modal(data):
+    """Render the SAM viewer modal."""
+    if not data or not isinstance(data, dict):
+        return [], {"display": "none"}
+    
+    if not SAM_VIEWER_AVAILABLE:
+        return [], {"display": "none"}
+    
+    image_data = data.get("image_data")
+    feature_info = data.get("feature_info", {})
+    
+    if not image_data:
+        return [], {"display": "none"}
+    
+    modal_content = create_sam_viewer_modal(image_data, feature_info)
+    modal_style = {"display": "block"}
+    
+    return modal_content, modal_style
+
+@app.callback(
+    Output("sam-viewer-store", "data", allow_duplicate=True),
+    Input("sam-close-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+def close_sam_viewer(n_clicks):
+    """Close the SAM viewer."""
+    if not n_clicks:
+        raise PreventUpdate
+    return None
+
+# Set up SAM callbacks if available
+if SAM_VIEWER_AVAILABLE:
+    setup_sam_callbacks(app)
 
 
 if __name__ == "__main__":
