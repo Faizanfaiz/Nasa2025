@@ -63,6 +63,9 @@ TERRAIN_MAX_PATCH_DEGREES = 14.0
 
 FEATURE_STORAGE_PATH = Path(__file__).resolve().parent / "feature_store.json"
 FEATURE_SNAPSHOT_DIR = Path(__file__).resolve().parent / "feature_snapshots"
+SAM_CHECKPOINT_ENV = "SAM_CHECKPOINT_PATH"
+SAM_MODEL_TYPE_DEFAULT = "vit_h"
+SAM_DEVICE_ENV = "SAM_DEVICE"
 
 
 REFERENCE_FEATURES: List[Dict[str, Any]] = [
@@ -146,6 +149,57 @@ def encode_snapshot_to_data_uri(snapshot_key: str) -> Optional[str]:
     except OSError:
         return None
     return f"data:image/png;base64,{base64.b64encode(data).decode()}"
+
+
+
+def run_sam_annotation(snapshot_path: Path) -> str:
+    try:
+        import torch  # type: ignore
+        from segment_anything import SamAutomaticMaskGenerator, sam_model_registry  # type: ignore
+    except ImportError as exc:  # pragma: no cover - optional dependency
+        raise RuntimeError(
+            "SAM segmentation requires the 'torch' and 'segment-anything' packages."
+        ) from exc
+
+    checkpoint = os.getenv(SAM_CHECKPOINT_ENV)
+    if not checkpoint:
+        raise RuntimeError(
+            "Set the SAM checkpoint path via the SAM_CHECKPOINT_PATH environment variable before running segmentation."
+        )
+
+    model_type = os.getenv("SAM_MODEL_TYPE", SAM_MODEL_TYPE_DEFAULT)
+    device = os.getenv(SAM_DEVICE_ENV)
+    if not device:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    try:
+        sam = sam_model_registry[model_type](checkpoint=checkpoint)
+        sam.to(device=device)
+    except Exception as exc:  # pragma: no cover - hardware dependent
+        raise RuntimeError(f"Unable to initialise SAM model: {exc}") from exc
+
+    generator = SamAutomaticMaskGenerator(sam)
+    image = np.array(Image.open(snapshot_path).convert("RGB"))
+    masks = generator.generate(image)
+    if not masks:
+        raise RuntimeError("SAM did not return any masks for this snapshot.")
+
+    overlay = image.astype(np.float32)
+    for mask in masks:
+        segmentation = mask.get("segmentation")
+        if segmentation is None:
+            continue
+        color = np.random.randint(0, 255, size=3)
+        overlay[segmentation] = (0.5 * overlay[segmentation]) + (0.5 * color)
+
+    result = Image.fromarray(np.clip(overlay, 0, 255).astype("uint8"))
+    annotation_key = f"{snapshot_path.stem}_sam.png"
+    annotation_path = resolve_snapshot_path(annotation_key)
+    try:
+        result.save(annotation_path)
+    except OSError as exc:
+        raise RuntimeError(f"Unable to save SAM annotation: {exc}") from exc
+    return annotation_key
 
 
 def http_get_json(url: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -927,6 +981,7 @@ app.layout = html.Div(
         dcc.Store(id="probe-store", storage_type="memory"),
         dcc.Store(id="terrain-store", storage_type="memory"),
         dcc.Store(id="terrain-snapshot-store", storage_type="memory"),
+        dcc.Store(id="sam-annotation-store", storage_type="memory"),
         dcc.Store(id="terrain-prefetch-store", storage_type="memory"),
         dcc.Store(id="snapshot-view-store", storage_type="memory"),
         dcc.Store(id="feature-edit-index", storage_type="memory"),
@@ -1159,6 +1214,8 @@ def load_terrain_patch(
 
 @app.callback(
     Output("terrain-snapshot-store", "data"),
+    Output("snapshot-view-store", "data", allow_duplicate=True),
+    Output("sam-annotation-store", "data", allow_duplicate=True),
     Output("terrain-status", "children", allow_duplicate=True),
     Input("terrain-capture-btn", "n_clicks"),
     State("terrain-store", "data"),
@@ -1177,7 +1234,7 @@ def capture_terrain_snapshot(
             "Load a terrain patch before capturing a snapshot.",
             style={"color": "#facc15"},
         )
-        return dash.no_update, status
+        return dash.no_update, dash.no_update, dash.no_update, status
 
     figure = build_terrain_figure(data, float(exaggeration or 1.0))
     ensure_snapshot_directory()
@@ -1190,13 +1247,13 @@ def capture_terrain_snapshot(
             f"Snapshot failed: {exc}",
             style={"color": "#f97316"},
         )
-        return dash.no_update, status
+        return dash.no_update, dash.no_update, dash.no_update, status
     except Exception as exc:  # noqa: BLE001
         status = html.Span(
             f"Snapshot failed: {exc}",
             style={"color": "#f97316"},
         )
-        return dash.no_update, status
+        return dash.no_update, dash.no_update, dash.no_update, status
 
     try:
         output_path.write_bytes(image_bytes)
@@ -1205,7 +1262,7 @@ def capture_terrain_snapshot(
             f"Unable to save snapshot: {exc}",
             style={"color": "#f97316"},
         )
-        return dash.no_update, status
+        return dash.no_update, dash.no_update, dash.no_update, status
 
     center = data.get("center", [None, None]) if isinstance(data, dict) else [None, None]
     lat, lon = center if isinstance(center, (list, tuple)) else (None, None)
@@ -1214,7 +1271,9 @@ def capture_terrain_snapshot(
     else:
         message = "Captured terrain snapshot."
     status = html.Span(message, style={"color": "#34d399"})
-    return {"path": snapshot_key}, status
+    snapshot_payload = {"path": snapshot_key}
+    modal_payload = {"path": snapshot_key}
+    return snapshot_payload, modal_payload, None, status
 
 
 @app.callback(
@@ -1415,6 +1474,7 @@ def on_feature_view(n_clicks, features):
         "time": feature.get("time", ""),
         "lat": feature.get("lat"),
         "lon": feature.get("lon"),
+        "annotation_path": feature.get("annotation_path"),
     }
 
 
@@ -1432,20 +1492,35 @@ def render_snapshot_modal(data: Optional[Dict[str, Any]]):
         return [], {"display": "none"}
 
     data_uri = encode_snapshot_to_data_uri(snapshot_key)
+    annotation_key = data.get("annotation_path")
+    annotation_uri = (
+        encode_snapshot_to_data_uri(annotation_key)
+        if isinstance(annotation_key, str)
+        else None
+    )
+
     if not data_uri:
-        body = html.Div(
-            [
-                html.P("Snapshot not available.", style={"marginBottom": "1rem"}),
-                html.Button("Close", id="snapshot-close-btn", n_clicks=0, style={"padding": "0.4rem 0.9rem", "border": "none", "borderRadius": "0.35rem", "backgroundColor": "#2563eb", "color": "#e2e8f0"}),
-            ],
-            style={"backgroundColor": "#0f172a", "padding": "1.2rem", "borderRadius": "0.6rem", "maxWidth": "520px", "textAlign": "center"},
-        )
+        body_children: List[Any] = [
+            html.P("Snapshot not available.", style={"marginBottom": "1rem"}),
+            html.Button(
+                "Close",
+                id="snapshot-close-btn",
+                n_clicks=0,
+                style={
+                    "padding": "0.4rem 0.9rem",
+                    "border": "none",
+                    "borderRadius": "0.35rem",
+                    "backgroundColor": "#2563eb",
+                    "color": "#e2e8f0",
+                },
+            ),
+        ]
     else:
-        meta = []
+        meta: List[Any] = []
         name = data.get("name")
         if name:
             meta.append(html.H3(name, style={"marginBottom": "0.4rem"}))
-        subtitle_parts = []
+        subtitle_parts: List[str] = []
         dataset = data.get("dataset")
         if dataset:
             subtitle_parts.append(str(dataset))
@@ -1461,19 +1536,84 @@ def render_snapshot_modal(data: Optional[Dict[str, Any]]):
         notes = data.get("notes")
         if notes:
             meta.append(html.P(str(notes), style={"fontSize": "0.9rem", "opacity": 0.85, "marginBottom": "0.8rem"}))
-        meta.append(
+
+        gallery: List[Any] = [
             html.Img(
                 src=data_uri,
-                style={"maxWidth": "100%", "height": "auto", "borderRadius": "0.5rem", "border": "1px solid #1e293b"},
+                style={
+                    "maxWidth": "100%",
+                    "height": "auto",
+                    "borderRadius": "0.5rem",
+                    "border": "1px solid #1e293b",
+                    "marginBottom": "0.75rem",
+                },
+            )
+        ]
+        if annotation_uri:
+            gallery.append(
+                html.Img(
+                    src=annotation_uri,
+                    style={
+                        "maxWidth": "100%",
+                        "height": "auto",
+                        "borderRadius": "0.5rem",
+                        "border": "1px solid #10b981",
+                    },
+                )
+            )
+
+        controls: List[Any] = []
+        controls.append(
+            html.Button(
+                "Close",
+                id="snapshot-close-btn",
+                n_clicks=0,
+                style={
+                    "padding": "0.45rem 1rem",
+                    "border": "none",
+                    "borderRadius": "0.35rem",
+                    "backgroundColor": "#2563eb",
+                    "color": "#e2e8f0",
+                },
             )
         )
-        meta.append(
-            html.Button("Close", id="snapshot-close-btn", n_clicks=0, style={"marginTop": "1rem", "padding": "0.45rem 1rem", "border": "none", "borderRadius": "0.35rem", "backgroundColor": "#2563eb", "color": "#e2e8f0"})
+        controls.insert(
+            0,
+            html.Button(
+                "Run SAM segmentation" if not annotation_uri else "Re-run SAM segmentation",
+                id="snapshot-sam-btn",
+                n_clicks=0,
+                style={
+                    "padding": "0.45rem 1rem",
+                    "border": "none",
+                    "borderRadius": "0.35rem",
+                    "backgroundColor": "#14b8a6",
+                    "color": "#0f172a",
+                },
+            ),
         )
-        body = html.Div(
-            meta,
-            style={"backgroundColor": "#0f172a", "padding": "1.5rem", "borderRadius": "0.75rem", "maxWidth": "640px", "textAlign": "center"},
-        )
+
+        body_children = meta + [
+            html.Div(
+                gallery,
+                style={"display": "grid", "gap": "0.75rem"},
+            ),
+            html.Div(
+                controls,
+                style={"display": "flex", "gap": "0.6rem", "justifyContent": "center", "marginTop": "1rem"},
+            ),
+        ]
+
+    body = html.Div(
+        body_children,
+        style={
+            "backgroundColor": "#0f172a",
+            "padding": "1.5rem",
+            "borderRadius": "0.75rem",
+            "maxWidth": "640px",
+            "textAlign": "center",
+        },
+    )
 
     overlay_style = {
         "position": "fixed",
@@ -1489,6 +1629,49 @@ def render_snapshot_modal(data: Optional[Dict[str, Any]]):
         "padding": "2rem",
     }
     return body, overlay_style
+
+
+@app.callback(
+    Output("sam-annotation-store", "data"),
+    Output("snapshot-view-store", "data", allow_duplicate=True),
+    Output("terrain-status", "children", allow_duplicate=True),
+    Input("snapshot-sam-btn", "n_clicks"),
+    State("snapshot-view-store", "data"),
+    prevent_initial_call=True,
+)
+def run_snapshot_segmentation(
+    n_clicks: Optional[int],
+    view_data: Optional[Dict[str, Any]],
+):
+    if not n_clicks or not isinstance(view_data, dict):
+        raise PreventUpdate
+
+    snapshot_key = view_data.get("path")
+    if not isinstance(snapshot_key, str):
+        raise PreventUpdate
+
+    snapshot_path = resolve_snapshot_path(snapshot_key)
+    if not snapshot_path.exists():
+        status = html.Span(
+            "Snapshot file missing on disk; capture a new snapshot before running SAM.",
+            style={"color": "#f97316"},
+        )
+        return dash.no_update, dash.no_update, status
+
+    try:
+        annotation_key = run_sam_annotation(snapshot_path)
+    except RuntimeError as exc:
+        status = html.Span(str(exc), style={"color": "#f87171"})
+        return dash.no_update, dash.no_update, status
+
+    updated_view = dict(view_data)
+    updated_view["annotation_path"] = annotation_key
+    annotation_payload = {"path": annotation_key}
+    status = html.Span(
+        "SAM segmentation completed.",
+        style={"color": "#34d399"},
+    )
+    return annotation_payload, updated_view, status
 
 
 @app.callback(
@@ -1519,6 +1702,7 @@ def render_terrain(data: Optional[Dict[str, Any]], exaggeration: Optional[float]
     Output("feature-name", "value", allow_duplicate=True),
     Output("feature-notes", "value", allow_duplicate=True),
     Output("terrain-snapshot-store", "data", allow_duplicate=True),
+    Output("sam-annotation-store", "data", allow_duplicate=True),
     Input("save-feature-btn", "n_clicks"),
     State("feature-store", "data"),
     State("feature-name", "value"),
@@ -1530,6 +1714,7 @@ def render_terrain(data: Optional[Dict[str, Any]], exaggeration: Optional[float]
     State("probe-store", "data"),
     State("feature-edit-index", "data"),
     State("terrain-snapshot-store", "data"),
+    State("sam-annotation-store", "data"),
     prevent_initial_call=True,
 )
 def save_feature(
@@ -1544,6 +1729,7 @@ def save_feature(
     probe: Optional[Dict[str, Any]],
     edit_index: Optional[int],
     snapshot_data: Optional[Dict[str, Any]],
+    sam_data: Optional[Dict[str, Any]],
 ):
     if not n_clicks:
         raise PreventUpdate
@@ -1558,14 +1744,25 @@ def save_feature(
 
     features_list = list(current_features or [])
     existing_snapshot: Optional[str] = None
+    existing_annotation: Optional[str] = None
     if isinstance(edit_index, int) and 0 <= edit_index < len(features_list):
         existing_snapshot = features_list[edit_index].get("snapshot_path")
+        existing_annotation = features_list[edit_index].get("annotation_path")
 
     snapshot_key: Optional[str] = None
     if isinstance(snapshot_data, dict):
         candidate = snapshot_data.get("path")
         if isinstance(candidate, str) and candidate:
             snapshot_key = candidate
+
+    annotation_key: Optional[str] = None
+    if isinstance(sam_data, dict):
+        sam_candidate = sam_data.get("path")
+        if isinstance(sam_candidate, str) and sam_candidate:
+            annotation_key = sam_candidate
+
+    if snapshot_key and annotation_key is None:
+        existing_annotation = None
 
     if not name or not str(name).strip():
         errors.append("Name required")
@@ -1576,7 +1773,7 @@ def save_feature(
 
     if errors:
         message = html.Span(" | ".join(errors), style={"color": "#f87171"})
-        return current_features or [], message, edit_index, name, notes, snapshot_data
+        return current_features or [], message, edit_index, name, notes, snapshot_data, sam_data
 
     observation_title = "MOLA global"
     observation_date = "Global"
@@ -1602,6 +1799,12 @@ def save_feature(
     elif existing_snapshot:
         feature_data["snapshot_path"] = existing_snapshot
 
+    annotation_applicable = bool(snapshot_key or existing_snapshot)
+    if annotation_key and annotation_applicable:
+        feature_data["annotation_path"] = annotation_key
+    elif existing_annotation and annotation_applicable:
+        feature_data["annotation_path"] = existing_annotation
+
     updated = features_list
     next_edit_index = None
     if isinstance(edit_index, int) and 0 <= edit_index < len(updated):
@@ -1617,7 +1820,7 @@ def save_feature(
             style={"color": "#34d399"},
         )
     persist_feature_collection(updated)
-    return updated, message, next_edit_index, "", "", None
+    return updated, message, next_edit_index, "", "", None, None
 
 
 @app.callback(
@@ -1794,6 +1997,8 @@ def on_feature_delete(n_clicks, features, edit_index):
 
 if __name__ == "__main__":
     app.run(debug=True)
+
+
 
 
 
