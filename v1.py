@@ -995,6 +995,7 @@ app.layout = html.Div(
         dcc.Store(id="feature-edit-index", storage_type="memory"),
         dcc.Store(id="feature-store", storage_type="memory", data=load_initial_feature_collection()),
         dcc.Store(id="sam-viewer-store", storage_type="memory"),
+        dcc.Store(id="terrain-camera-store", storage_type="memory"),
         html.Div(id="snapshot-modal", style={"display": "none"}),
         html.Div(id="sam-viewer-modal", style={"display": "none"}),
     ],
@@ -1231,6 +1232,8 @@ def load_terrain_patch(
     State("terrain-store", "data"),
     State("terrain-exaggeration-slider", "value"),
     State("terrain-graph", "figure"),
+    State("terrain-camera-store", "data"),
+    State("terrain-snapshot-store", "data"),
     prevent_initial_call=True,
 )
 def capture_terrain_snapshot(
@@ -1238,6 +1241,8 @@ def capture_terrain_snapshot(
     data: Optional[Dict[str, Any]],
     exaggeration: Optional[float],
     current_figure: Optional[Dict[str, Any]],
+    camera_state: Optional[Dict[str, Any]],
+    snapshot_data: Optional[Dict[str, Any]],
 ):
     if not n_clicks:
         raise PreventUpdate
@@ -1251,12 +1256,27 @@ def capture_terrain_snapshot(
     # Use the current figure to preserve camera angle and view
     if current_figure:
         figure = go.Figure(current_figure)
+        
+        # Apply the stored camera state to preserve the current view
+        if camera_state and 'scene' in figure.layout:
+            figure.layout.scene.camera = camera_state
     else:
         # Fallback to building a new figure if current figure is not available
         figure = build_terrain_figure(data, float(exaggeration or 1.0))
     
     ensure_snapshot_directory()
-    snapshot_key = build_snapshot_filename()
+    
+    # Check if there's an existing snapshot to replace
+    existing_snapshot_data = snapshot_data or {}
+    existing_snapshot_path = existing_snapshot_data.get("path")
+    
+    if existing_snapshot_path and snapshot_exists(existing_snapshot_path):
+        # Reuse the existing filename to replace the old snapshot
+        snapshot_key = existing_snapshot_path
+    else:
+        # Create a new unique filename
+        snapshot_key = build_snapshot_filename()
+    
     output_path = resolve_snapshot_path(snapshot_key)
     try:
         image_bytes = pio.to_image(figure, format="png", scale=1)
@@ -1595,21 +1615,6 @@ def render_snapshot_modal(data: Optional[Dict[str, Any]]):
                 },
             )
         )
-        controls.insert(
-            0,
-            html.Button(
-                "Run SAM segmentation" if not annotation_uri else "Re-run SAM segmentation",
-                id="snapshot-sam-btn",
-                n_clicks=0,
-                style={
-                    "padding": "0.45rem 1rem",
-                    "border": "none",
-                    "borderRadius": "0.35rem",
-                    "backgroundColor": "#14b8a6",
-                    "color": "#0f172a",
-                },
-            ),
-        )
         
         # Add interactive SAM viewer button if available
         if SAM_VIEWER_AVAILABLE:
@@ -1721,6 +1726,17 @@ def render_terrain(data: Optional[Dict[str, Any]], exaggeration: Optional[float]
     if not data:
         return build_empty_terrain_figure()
     return build_terrain_figure(data, float(exaggeration or 1.0))
+
+@app.callback(
+    Output("terrain-camera-store", "data"),
+    Input("terrain-graph", "relayoutData"),
+    prevent_initial_call=True,
+)
+def capture_camera_state(relayout_data: Optional[Dict[str, Any]]):
+    """Capture the current camera state for snapshot preservation."""
+    if relayout_data and 'scene.camera' in relayout_data:
+        return relayout_data['scene.camera']
+    return dash.no_update
 
 
 @app.callback(

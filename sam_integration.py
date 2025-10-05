@@ -277,7 +277,20 @@ class SAMImageProcessor:
             return None
         
         if filename is None:
-            filename = f"segment_{int(np.sum(self.current_mask))}.png"
+            # Create a new unique filename
+            import datetime
+            import uuid
+            timestamp = datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%S")
+            filename = f"segment_{timestamp}_{uuid.uuid4().hex[:8]}.png"
+        
+        # Ensure the filename has the correct path
+        from pathlib import Path
+        from v1 import FEATURE_SNAPSHOT_DIR
+        
+        # If filename doesn't have a path, save it in the feature snapshots directory
+        if not Path(filename).is_absolute():
+            FEATURE_SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+            filename = str(FEATURE_SNAPSHOT_DIR / filename)
         
         segment = extract_segment_image(self.current_image, self.current_mask)
         segment.save(filename)

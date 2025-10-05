@@ -25,15 +25,5 @@
     "time": "Global",
     "source": "reference",
     "dataset": "MOLA"
-  },
-  {
-    "name": "wretyhj",
-    "lat": -27.60029769058589,
-    "lon": -23.818359375000004,
-    "notes": "esgdhj",
-    "time": "Global",
-    "source": "user",
-    "dataset": "MOLA global",
-    "elevation": -140.4318389892578
   }
 ]

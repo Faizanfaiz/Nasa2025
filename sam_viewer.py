@@ -69,26 +69,42 @@ def create_sam_viewer_modal(image_data: str, feature_info: Dict[str, Any]) -> ht
                 # Main content area
                 html.Div([
                     # Left side - Interactive image
-                    html.Div([
                         html.Div([
-                            html.Img(
-                                id="sam-interactive-image",
-                                src=image_data,
-                                style={
-                                    "width": "100%", 
-                                    "height": "500px", 
-                                    "objectFit": "contain",
-                                    "cursor": "crosshair",
-                                    "border": "2px solid #374151",
-                                    "borderRadius": "0.5rem"
-                                }
-                            ),
-                            # Hidden div to store click coordinates
-                            html.Div(id="sam-click-coords", style={"display": "none"}),
-                            # Hidden div to store hover coordinates  
-                            html.Div(id="sam-hover-coords", style={"display": "none"})
-                        ])
-                    ], style={"flex": "2", "marginRight": "1rem"}),
+                            html.Div([
+                                # Interactive image with click capture
+                                html.Div([
+                                    html.Img(
+                                        id="sam-interactive-image",
+                                        src=image_data,
+                                        style={
+                                            "width": "100%", 
+                                            "height": "500px", 
+                                            "objectFit": "contain",
+                                            "cursor": "crosshair",
+                                            "border": "2px solid #374151",
+                                            "borderRadius": "0.5rem"
+                                        }
+                                    ),
+                                    # Invisible overlay for click capture
+                                    html.Div(
+                                        id="sam-click-overlay",
+                                        style={
+                                            "position": "absolute",
+                                            "top": "0",
+                                            "left": "0",
+                                            "width": "100%",
+                                            "height": "100%",
+                                            "cursor": "crosshair",
+                                            "zIndex": "10"
+                                        }
+                                    )
+                                ], style={"position": "relative"}),
+                                # Hidden div to store click coordinates
+                                html.Div(id="sam-click-coords", style={"display": "none"}),
+                                # Hidden div to store hover coordinates  
+                                html.Div(id="sam-hover-coords", style={"display": "none"})
+                            ])
+                        ], style={"flex": "2", "marginRight": "1rem"}),
                     
                     # Right side - Controls and results
                     html.Div([
@@ -113,13 +129,6 @@ def create_sam_viewer_modal(image_data: str, feature_info: Dict[str, Any]) -> ht
                                           "border": "none", "borderRadius": "0.5rem",
                                           "cursor": "pointer", "marginBottom": "0.5rem"
                                       }),
-                            html.Button("Download Full Image", id="download-full-btn",
-                                      style={
-                                          "width": "100%", "padding": "0.75rem",
-                                          "backgroundColor": "#2563eb", "color": "white",
-                                          "border": "none", "borderRadius": "0.5rem",
-                                          "cursor": "pointer"
-                                      })
                         ], style={
                             "backgroundColor": "#111c34",
                             "padding": "1rem",
@@ -215,27 +224,31 @@ def setup_sam_callbacks(app):
     
     @app.callback(
         Output("sam-click-coords", "children"),
-        Input("sam-interactive-image", "n_clicks"),
-        State("sam-interactive-image", "id"),
+        Input("sam-click-overlay", "n_clicks"),
+        State("sam-click-overlay", "id"),
         prevent_initial_call=True
     )
-    def handle_image_click(n_clicks, image_id):
-        """Handle click events on the interactive image."""
+    def handle_image_click(n_clicks, overlay_id):
+        """Handle click events on the interactive image overlay."""
         if not n_clicks:
             raise PreventUpdate
         
-        # For now, simulate a click at the center of the image
-        # In a real implementation, you'd capture the actual click coordinates
-        x, y = 0.5, 0.5  # Normalized coordinates (0-1)
-        return f"{x},{y}"
+        # For now, simulate different click positions to test segment updates
+        # In a real implementation, you'd capture the actual click coordinates from the event
+        import random
+        x = random.uniform(0.2, 0.8)  # Random x between 0.2 and 0.8
+        y = random.uniform(0.2, 0.8)  # Random y between 0.2 and 0.8
+        return f"{x:.3f},{y:.3f}"
     
     @app.callback(
         Output("sam-status", "children"),
         Output("segment-info", "children"),
+        Output("sam-interactive-image", "src"),
         Input("sam-click-coords", "children"),
+        State("sam-interactive-image", "src"),
         prevent_initial_call=True
     )
-    def handle_click_coordinates(coords_str):
+    def handle_click_coordinates(coords_str, current_image_src):
         """Handle click coordinates and perform segmentation."""
         if not coords_str:
             raise PreventUpdate
@@ -246,16 +259,29 @@ def setup_sam_callbacks(app):
             img_x = int(x * 1000)  # Assuming 1000px width
             img_y = int((1 - y) * 1000)  # Flip Y coordinate
             
-            return handle_click_event({"x": x, "y": y, "img_x": img_x, "img_y": img_y})
+            status, segment_info = handle_click_event({"x": x, "y": y, "img_x": img_x, "img_y": img_y})
+            
+            # Get the highlighted image from the SAM processor
+            highlighted_image_src = current_image_src  # Default to current image
+            if hasattr(sam_processor, 'current_mask') and sam_processor.current_mask is not None:
+                # Get the highlighted image from the processor
+                from sam_integration import create_highlighted_image, image_to_base64
+                if sam_processor.current_image is not None:
+                    highlighted = create_highlighted_image(sam_processor.current_image, sam_processor.current_mask)
+                    highlighted_image_src = image_to_base64(highlighted)
+            
+            return status, segment_info, highlighted_image_src
         except (ValueError, TypeError):
             raise PreventUpdate
     
     @app.callback(
         Output("sam-status", "children", allow_duplicate=True),
+        Output("sam-annotation-store", "data", allow_duplicate=True),
         Input("save-segment-btn", "n_clicks"),
+        State("sam-annotation-store", "data"),
         prevent_initial_call=True
     )
-    def save_segment(n_clicks):
+    def save_segment(n_clicks, annotation_data):
         """Save the currently selected segment."""
         if not n_clicks:
             raise PreventUpdate
@@ -269,16 +295,31 @@ def setup_sam_callbacks(app):
                           style={"color": "#f87171"})
         
         try:
-            filename = sam_processor.save_segment()
+            # Check if there's an existing annotation to replace
+            existing_filename = None
+            if annotation_data and isinstance(annotation_data, dict):
+                existing_filename = annotation_data.get("path")
+            
+            # Save segment with replacement logic
+            filename = sam_processor.save_segment(existing_filename)
             if filename:
-                return html.Div(f"✅ Segment saved as {filename}", 
-                              style={"color": "#34d399"})
+                # Update annotation data with new segment info
+                updated_annotation = {
+                    "path": filename,
+                    "timestamp": sam_processor.current_timestamp if hasattr(sam_processor, 'current_timestamp') else None
+                }
+                
+                status = html.Div(f"✅ Segment saved as {filename}", 
+                                style={"color": "#34d399"})
+                return status, updated_annotation
             else:
-                return html.Div("❌ Failed to save segment", 
-                              style={"color": "#f87171"})
+                status = html.Div("❌ Failed to save segment", 
+                                style={"color": "#f87171"})
+                return status, dash.no_update
         except Exception as e:
-            return html.Div(f"❌ Error saving segment: {str(e)}", 
-                          style={"color": "#f87171"})
+            status = html.Div(f"❌ Error saving segment: {str(e)}", 
+                            style={"color": "#f87171"})
+            return status, dash.no_update
     
     @app.callback(
         Output("sam-status", "children", allow_duplicate=True),
