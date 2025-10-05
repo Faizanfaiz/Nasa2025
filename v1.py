@@ -1257,27 +1257,27 @@ def capture_terrain_snapshot(
     # Use the current figure to preserve camera angle and view
     if current_figure:
         figure = go.Figure(current_figure)
-        
+
         # Apply the stored camera state to preserve the current view
         if camera_state and 'scene' in figure.layout:
             figure.layout.scene.camera = camera_state
     else:
         # Fallback to building a new figure if current figure is not available
         figure = build_terrain_figure(data, float(exaggeration or 1.0))
-    
+
     ensure_snapshot_directory()
-    
+
     # Check if there's an existing snapshot to replace
     existing_snapshot_data = snapshot_data or {}
     existing_snapshot_path = existing_snapshot_data.get("path")
-    
+
     if existing_snapshot_path and snapshot_exists(existing_snapshot_path):
         # Reuse the existing filename to replace the old snapshot
         snapshot_key = existing_snapshot_path
     else:
         # Create a new unique filename
         snapshot_key = build_snapshot_filename()
-    
+
     output_path = resolve_snapshot_path(snapshot_key)
     try:
         image_bytes = pio.to_image(figure, format="png", scale=1)
@@ -1616,7 +1616,7 @@ def render_snapshot_modal(data: Optional[Dict[str, Any]]):
                 },
             )
         )
-        
+
         # Add interactive SAM viewer button if available
         if SAM_VIEWER_AVAILABLE:
             controls.insert(
@@ -2051,19 +2051,19 @@ def open_sam_viewer(n_clicks, snapshot_data):
     """Open SAM viewer when analysis button is clicked."""
     if not n_clicks or not snapshot_data:
         raise PreventUpdate
-    
+
     if not SAM_VIEWER_AVAILABLE:
         raise PreventUpdate
-    
+
     # Get the image data URI
     snapshot_key = snapshot_data.get("path")
     if not snapshot_key:
         raise PreventUpdate
-    
+
     data_uri = encode_snapshot_to_data_uri(snapshot_key)
     if not data_uri:
         raise PreventUpdate
-    
+
     return {
         "image_data": data_uri,
         "feature_info": snapshot_data
@@ -2078,19 +2078,19 @@ def render_sam_viewer_modal(data):
     """Render the SAM viewer modal."""
     if not data or not isinstance(data, dict):
         return [], {"display": "none"}
-    
+
     if not SAM_VIEWER_AVAILABLE:
         return [], {"display": "none"}
-    
+
     image_data = data.get("image_data")
     feature_info = data.get("feature_info", {})
-    
+
     if not image_data:
         return [], {"display": "none"}
-    
+
     modal_content = create_sam_viewer_modal(image_data, feature_info)
     modal_style = {"display": "block"}
-    
+
     return modal_content, modal_style
 
 @app.callback(
@@ -2110,10 +2110,4 @@ if SAM_VIEWER_AVAILABLE:
 
 
 if __name__ == "__main__":
-    app.run(debug=False, host='0.0.0.0')
-
-
-
-
-
-
+    app.run(debug=False, host='0.0.0.0', port='80')
