@@ -7,9 +7,11 @@ from functools import lru_cache
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import io
+import base64
 import dash
 import numpy as np
 import plotly.graph_objects as go
+import plotly.io as pio
 import requests
 from PIL import Image
 import json
@@ -60,6 +62,7 @@ TERRAIN_MAX_PIXEL_RESOLUTION = 384
 TERRAIN_MAX_PATCH_DEGREES = 14.0
 
 FEATURE_STORAGE_PATH = Path(__file__).resolve().parent / "feature_store.json"
+FEATURE_SNAPSHOT_DIR = Path(__file__).resolve().parent / "feature_snapshots"
 
 
 REFERENCE_FEATURES: List[Dict[str, Any]] = [
@@ -113,6 +116,36 @@ def persist_feature_collection(features: Sequence[Dict[str, Any]]) -> None:
         )
     except OSError:
         pass
+
+
+def ensure_snapshot_directory() -> None:
+    try:
+        FEATURE_SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+
+
+def build_snapshot_filename() -> str:
+    timestamp = dt.datetime.utcnow().strftime("%Y%m%dT%H%M%S")
+    return f"snapshot_{timestamp}_{uuid.uuid4().hex[:8]}.png"
+
+
+def resolve_snapshot_path(snapshot_key: str) -> Path:
+    return FEATURE_SNAPSHOT_DIR / snapshot_key
+
+
+def snapshot_exists(snapshot_key: Optional[str]) -> bool:
+    if not snapshot_key:
+        return False
+    return resolve_snapshot_path(snapshot_key).exists()
+
+
+def encode_snapshot_to_data_uri(snapshot_key: str) -> Optional[str]:
+    try:
+        data = resolve_snapshot_path(snapshot_key).read_bytes()
+    except OSError:
+        return None
+    return f"data:image/png;base64,{base64.b64encode(data).decode()}"
 
 
 def http_get_json(url: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -791,6 +824,12 @@ app.layout = html.Div(
                                             ],
                                             style={"display": "flex", "marginTop": "0.5rem"},
                                         ),
+                                        html.Button(
+                                            "Capture terrain snapshot",
+                                            id="terrain-capture-btn",
+                                            n_clicks=0,
+                                            style={"marginTop": "0.6rem", "width": "100%", "backgroundColor": "#0ea5e9", "color": "#0f172a", "border": "none", "padding": "0.5rem", "borderRadius": "0.4rem", "fontWeight": "600"},
+                                        ),
                                     ],
                                     style={"display": "grid", "gap": "0.35rem"},
                                 ),
@@ -887,9 +926,12 @@ app.layout = html.Div(
         dcc.Store(id="overlay-catalog-store", storage_type="memory"),
         dcc.Store(id="probe-store", storage_type="memory"),
         dcc.Store(id="terrain-store", storage_type="memory"),
+        dcc.Store(id="terrain-snapshot-store", storage_type="memory"),
         dcc.Store(id="terrain-prefetch-store", storage_type="memory"),
+        dcc.Store(id="snapshot-view-store", storage_type="memory"),
         dcc.Store(id="feature-edit-index", storage_type="memory"),
         dcc.Store(id="feature-store", storage_type="memory", data=load_initial_feature_collection()),
+        html.Div(id="snapshot-modal", style={"display": "none"}),
     ],
     style={
         "maxWidth": "1200px",
@@ -1116,6 +1158,66 @@ def load_terrain_patch(
 
 
 @app.callback(
+    Output("terrain-snapshot-store", "data"),
+    Output("terrain-status", "children", allow_duplicate=True),
+    Input("terrain-capture-btn", "n_clicks"),
+    State("terrain-store", "data"),
+    State("terrain-exaggeration-slider", "value"),
+    prevent_initial_call=True,
+)
+def capture_terrain_snapshot(
+    n_clicks: Optional[int],
+    data: Optional[Dict[str, Any]],
+    exaggeration: Optional[float],
+):
+    if not n_clicks:
+        raise PreventUpdate
+    if not data:
+        status = html.Span(
+            "Load a terrain patch before capturing a snapshot.",
+            style={"color": "#facc15"},
+        )
+        return dash.no_update, status
+
+    figure = build_terrain_figure(data, float(exaggeration or 1.0))
+    ensure_snapshot_directory()
+    snapshot_key = build_snapshot_filename()
+    output_path = resolve_snapshot_path(snapshot_key)
+    try:
+        image_bytes = pio.to_image(figure, format="png", scale=1)
+    except ValueError as exc:
+        status = html.Span(
+            f"Snapshot failed: {exc}",
+            style={"color": "#f97316"},
+        )
+        return dash.no_update, status
+    except Exception as exc:  # noqa: BLE001
+        status = html.Span(
+            f"Snapshot failed: {exc}",
+            style={"color": "#f97316"},
+        )
+        return dash.no_update, status
+
+    try:
+        output_path.write_bytes(image_bytes)
+    except OSError as exc:
+        status = html.Span(
+            f"Unable to save snapshot: {exc}",
+            style={"color": "#f97316"},
+        )
+        return dash.no_update, status
+
+    center = data.get("center", [None, None]) if isinstance(data, dict) else [None, None]
+    lat, lon = center if isinstance(center, (list, tuple)) else (None, None)
+    if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
+        message = f"Captured terrain snapshot at lat {lat:.2f}, lon {lon:.2f}."
+    else:
+        message = "Captured terrain snapshot."
+    status = html.Span(message, style={"color": "#34d399"})
+    return {"path": snapshot_key}, status
+
+
+@app.callback(
     Output("terrain-store", "data", allow_duplicate=True),
     Output("probe-store", "data", allow_duplicate=True),
     Output("terrain-status", "children", allow_duplicate=True),
@@ -1284,6 +1386,121 @@ def render_probe_readout(probe: Optional[Dict[str, Any]]):
 
 
 
+
+
+@app.callback(
+    Output("snapshot-view-store", "data"),
+    Input({"type": "feature-view", "index": ALL}, "n_clicks"),
+    State("feature-store", "data"),
+    prevent_initial_call=True,
+)
+def on_feature_view(n_clicks, features):
+    index = get_dynamic_callback_index("feature-view")
+    if (
+        features is None
+        or not isinstance(index, int)
+        or index < 0
+        or index >= len(features)
+    ):
+        raise PreventUpdate
+    feature = features[index]
+    snapshot_key = feature.get("snapshot_path")
+    if not snapshot_key or not snapshot_exists(snapshot_key):
+        raise PreventUpdate
+    return {
+        "path": snapshot_key,
+        "name": feature.get("name", "Feature"),
+        "notes": feature.get("notes", ""),
+        "dataset": feature.get("dataset", ""),
+        "time": feature.get("time", ""),
+        "lat": feature.get("lat"),
+        "lon": feature.get("lon"),
+    }
+
+
+@app.callback(
+    Output("snapshot-modal", "children"),
+    Output("snapshot-modal", "style"),
+    Input("snapshot-view-store", "data"),
+)
+def render_snapshot_modal(data: Optional[Dict[str, Any]]):
+    if not isinstance(data, dict):
+        return [], {"display": "none"}
+
+    snapshot_key = data.get("path")
+    if not isinstance(snapshot_key, str):
+        return [], {"display": "none"}
+
+    data_uri = encode_snapshot_to_data_uri(snapshot_key)
+    if not data_uri:
+        body = html.Div(
+            [
+                html.P("Snapshot not available.", style={"marginBottom": "1rem"}),
+                html.Button("Close", id="snapshot-close-btn", n_clicks=0, style={"padding": "0.4rem 0.9rem", "border": "none", "borderRadius": "0.35rem", "backgroundColor": "#2563eb", "color": "#e2e8f0"}),
+            ],
+            style={"backgroundColor": "#0f172a", "padding": "1.2rem", "borderRadius": "0.6rem", "maxWidth": "520px", "textAlign": "center"},
+        )
+    else:
+        meta = []
+        name = data.get("name")
+        if name:
+            meta.append(html.H3(name, style={"marginBottom": "0.4rem"}))
+        subtitle_parts = []
+        dataset = data.get("dataset")
+        if dataset:
+            subtitle_parts.append(str(dataset))
+        time_value = data.get("time")
+        if time_value:
+            subtitle_parts.append(str(time_value))
+        if subtitle_parts:
+            meta.append(html.P(" | ".join(subtitle_parts), style={"opacity": 0.75, "marginBottom": "0.4rem"}))
+        lat = data.get("lat")
+        lon = data.get("lon")
+        if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
+            meta.append(html.P(f"Lat {lat:.2f}, Lon {lon:.2f}", style={"opacity": 0.75, "marginBottom": "0.6rem"}))
+        notes = data.get("notes")
+        if notes:
+            meta.append(html.P(str(notes), style={"fontSize": "0.9rem", "opacity": 0.85, "marginBottom": "0.8rem"}))
+        meta.append(
+            html.Img(
+                src=data_uri,
+                style={"maxWidth": "100%", "height": "auto", "borderRadius": "0.5rem", "border": "1px solid #1e293b"},
+            )
+        )
+        meta.append(
+            html.Button("Close", id="snapshot-close-btn", n_clicks=0, style={"marginTop": "1rem", "padding": "0.45rem 1rem", "border": "none", "borderRadius": "0.35rem", "backgroundColor": "#2563eb", "color": "#e2e8f0"})
+        )
+        body = html.Div(
+            meta,
+            style={"backgroundColor": "#0f172a", "padding": "1.5rem", "borderRadius": "0.75rem", "maxWidth": "640px", "textAlign": "center"},
+        )
+
+    overlay_style = {
+        "position": "fixed",
+        "top": 0,
+        "bottom": 0,
+        "left": 0,
+        "right": 0,
+        "backgroundColor": "rgba(15, 23, 42, 0.85)",
+        "display": "flex",
+        "alignItems": "center",
+        "justifyContent": "center",
+        "zIndex": 9999,
+        "padding": "2rem",
+    }
+    return body, overlay_style
+
+
+@app.callback(
+    Output("snapshot-view-store", "data", allow_duplicate=True),
+    Input("snapshot-close-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+def close_snapshot_modal(n_clicks):
+    if not n_clicks:
+        raise PreventUpdate
+    return None
+
 @app.callback(
     Output("terrain-graph", "figure"),
     Input("terrain-store", "data"),
@@ -1301,6 +1518,7 @@ def render_terrain(data: Optional[Dict[str, Any]], exaggeration: Optional[float]
     Output("feature-edit-index", "data", allow_duplicate=True),
     Output("feature-name", "value", allow_duplicate=True),
     Output("feature-notes", "value", allow_duplicate=True),
+    Output("terrain-snapshot-store", "data", allow_duplicate=True),
     Input("save-feature-btn", "n_clicks"),
     State("feature-store", "data"),
     State("feature-name", "value"),
@@ -1311,6 +1529,7 @@ def render_terrain(data: Optional[Dict[str, Any]], exaggeration: Optional[float]
     State("overlay-catalog-store", "data"),
     State("probe-store", "data"),
     State("feature-edit-index", "data"),
+    State("terrain-snapshot-store", "data"),
     prevent_initial_call=True,
 )
 def save_feature(
@@ -1324,6 +1543,7 @@ def save_feature(
     catalog: Sequence[Dict[str, Any]],
     probe: Optional[Dict[str, Any]],
     edit_index: Optional[int],
+    snapshot_data: Optional[Dict[str, Any]],
 ):
     if not n_clicks:
         raise PreventUpdate
@@ -1335,6 +1555,18 @@ def save_feature(
         lat_val = safe_float((probe or {}).get("lat"))
     if lon_val is None and probe:
         lon_val = safe_float((probe or {}).get("lon"))
+
+    features_list = list(current_features or [])
+    existing_snapshot: Optional[str] = None
+    if isinstance(edit_index, int) and 0 <= edit_index < len(features_list):
+        existing_snapshot = features_list[edit_index].get("snapshot_path")
+
+    snapshot_key: Optional[str] = None
+    if isinstance(snapshot_data, dict):
+        candidate = snapshot_data.get("path")
+        if isinstance(candidate, str) and candidate:
+            snapshot_key = candidate
+
     if not name or not str(name).strip():
         errors.append("Name required")
     if lat_val is None or not -90.0 <= lat_val <= 90.0:
@@ -1344,7 +1576,7 @@ def save_feature(
 
     if errors:
         message = html.Span(" | ".join(errors), style={"color": "#f87171"})
-        return current_features or [], message, edit_index, name, notes
+        return current_features or [], message, edit_index, name, notes, snapshot_data
 
     observation_title = "MOLA global"
     observation_date = "Global"
@@ -1365,7 +1597,12 @@ def save_feature(
     if probe and isinstance(probe, dict):
         feature_data["elevation"] = probe.get("elevation")
 
-    updated = list(current_features or [])
+    if snapshot_key:
+        feature_data["snapshot_path"] = snapshot_key
+    elif existing_snapshot:
+        feature_data["snapshot_path"] = existing_snapshot
+
+    updated = features_list
     next_edit_index = None
     if isinstance(edit_index, int) and 0 <= edit_index < len(updated):
         updated[edit_index] = feature_data
@@ -1380,7 +1617,7 @@ def save_feature(
             style={"color": "#34d399"},
         )
     persist_feature_collection(updated)
-    return updated, message, next_edit_index, "", ""
+    return updated, message, next_edit_index, "", "", None
 
 
 @app.callback(
@@ -1396,6 +1633,33 @@ def render_feature_layers(features: Sequence[Dict[str, Any]]):
 
     cards: List[html.Div] = []
     for idx, feature in enumerate(features):
+        buttons: List[html.Button] = []
+        snapshot_key = feature.get("snapshot_path")
+        if snapshot_key:
+            buttons.append(
+                html.Button(
+                    "View",
+                    id={"type": "feature-view", "index": idx},
+                    n_clicks=0,
+                    style={"flex": "1", "padding": "0.35rem", "backgroundColor": "#14b8a6", "color": "#0f172a", "border": "none", "borderRadius": "0.3rem"},
+                )
+            )
+        buttons.append(
+            html.Button(
+                "Edit",
+                id={"type": "feature-edit", "index": idx},
+                n_clicks=0,
+                style={"flex": "1", "padding": "0.35rem", "backgroundColor": "#2563eb", "color": "#e2e8f0", "border": "none", "borderRadius": "0.3rem"},
+            )
+        )
+        buttons.append(
+            html.Button(
+                "Delete",
+                id={"type": "feature-delete", "index": idx},
+                n_clicks=0,
+                style={"flex": "1", "padding": "0.35rem", "backgroundColor": "#dc2626", "color": "#f8fafc", "border": "none", "borderRadius": "0.3rem"},
+            )
+        )
         cards.append(
             html.Div(
                 [
@@ -1414,20 +1678,7 @@ def render_feature_layers(features: Sequence[Dict[str, Any]]):
                         ]
                     ),
                     html.Div(
-                        [
-                            html.Button(
-                                "Edit",
-                                id={"type": "feature-edit", "index": idx},
-                                n_clicks=0,
-                                style={"flex": "1", "padding": "0.35rem", "backgroundColor": "#2563eb", "color": "#e2e8f0", "border": "none", "borderRadius": "0.3rem"},
-                            ),
-                            html.Button(
-                                "Delete",
-                                id={"type": "feature-delete", "index": idx},
-                                n_clicks=0,
-                                style={"flex": "1", "padding": "0.35rem", "backgroundColor": "#dc2626", "color": "#f8fafc", "border": "none", "borderRadius": "0.3rem"},
-                            ),
-                        ],
+                        buttons,
                         style={"display": "flex", "gap": "0.5rem", "marginTop": "0.6rem"},
                     ),
                 ],
@@ -1543,5 +1794,7 @@ def on_feature_delete(n_clicks, features, edit_index):
 
 if __name__ == "__main__":
     app.run(debug=True)
+
+
 
 
