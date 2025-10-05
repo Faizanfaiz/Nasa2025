@@ -12,8 +12,10 @@ import numpy as np
 import plotly.graph_objects as go
 import requests
 from PIL import Image
+import json
 
 from dash import Dash, Input, Output, State, dcc, html
+from dash.dependencies import ALL
 from dash.exceptions import PreventUpdate
 import dash_leaflet as dl
 
@@ -34,6 +36,8 @@ USER_AGENT = "MarsExplorer/1.0 (NASA Space Apps prototype)"
 DEFAULT_TERRAIN_PATCH_DEGREES = 4.0
 TERRAIN_PIXEL_RESOLUTION = 160
 MOLA_NODATA_THRESHOLD = -1e20
+
+REQUEST_HEADERS = {"User-Agent": USER_AGENT}
 
 REFERENCE_FEATURES: List[Dict[str, Any]] = [
     {
@@ -68,7 +72,7 @@ REFERENCE_FEATURES: List[Dict[str, Any]] = [
 
 def http_get_json(url: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Fetch JSON with shared headers and error handling."""
-    response = requests.get(url, params=params, timeout=20, headers={"User-Agent": USER_AGENT})
+    response = requests.get(url, params=params, timeout=20, headers=REQUEST_HEADERS)
     response.raise_for_status()
     return response.json()
 
@@ -80,6 +84,23 @@ def safe_float(value: Any) -> Optional[float]:
         return None
 
 
+def get_dynamic_callback_index(expected_type: str) -> Optional[int]:
+    """Return the triggered index for a Dash pattern-matching callback."""
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        return None
+    prop_id = ctx.triggered[0]["prop_id"].split(".")[0]
+    if not prop_id:
+        return None
+    try:
+        trigger = json.loads(prop_id)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    if trigger.get("type") != expected_type:
+        return None
+    return trigger.get("index")
+
+
 @lru_cache(maxsize=128)
 def fetch_wmts_metadata(endpoint: str) -> Optional[Dict[str, Any]]:
     """Retrieve WMTS capabilities and return template plus zoom metadata."""
@@ -87,7 +108,7 @@ def fetch_wmts_metadata(endpoint: str) -> Optional[Dict[str, Any]]:
 
     url = endpoint.rstrip("/") + "/1.0.0/WMTSCapabilities.xml"
     try:
-        response = requests.get(url, timeout=20, headers={"User-Agent": USER_AGENT})
+        response = requests.get(url, timeout=20, headers=REQUEST_HEADERS)
         response.raise_for_status()
     except requests.RequestException:
         return None
@@ -143,8 +164,6 @@ def build_tile_template(endpoint: str) -> Optional[Dict[str, Any]]:
     template = template.replace("{TileRow}", "{y}")
     template = template.replace("{TileCol}", "{x}")
     template = template.replace('1.0.0//', '1.0.0/')
-    template = template.replace('/default/default028mm', '/default/default028mm')
-
     return {
         "url": template,
         "format": meta["format"],
@@ -304,7 +323,7 @@ def fetch_mola_patch(lat: float, lon: float, size_deg: float, pixels: int) -> Di
             ELEVATION_IDENTIFY_URL.replace('/identify', '/exportImage'),
             params=params,
             timeout=60,
-            headers={"User-Agent": USER_AGENT},
+            headers=REQUEST_HEADERS,
         )
         response.raise_for_status()
     except requests.RequestException as exc:
@@ -674,6 +693,7 @@ app.layout = html.Div(
         dcc.Store(id="overlay-catalog-store", storage_type="memory"),
         dcc.Store(id="probe-store", storage_type="memory"),
         dcc.Store(id="terrain-store", storage_type="memory"),
+        dcc.Store(id="feature-edit-index", storage_type="memory"),
         dcc.Store(id="feature-store", storage_type="memory", data=REFERENCE_FEATURES),
     ],
     style={
@@ -775,10 +795,7 @@ def update_overlay_layer(index: int, opacity: float, catalog: Sequence[Dict[str,
 
 
 @app.callback(
-    Output("probe-marker", "position", allow_duplicate=True),
     Output("probe-store", "data", allow_duplicate=True),
-    Output("terrain-lat-input", "value", allow_duplicate=True),
-    Output("terrain-lon-input", "value", allow_duplicate=True),
     Output("terrain-status", "children", allow_duplicate=True),
     Input("mars-map", "clickData"),
     Input("terrain-place-btn", "n_clicks"),
@@ -787,7 +804,7 @@ def update_overlay_layer(index: int, opacity: float, catalog: Sequence[Dict[str,
     State("probe-store", "data"),
     prevent_initial_call=True,
 )
-def update_probe_location(
+def handle_probe_source(
     click_data: Optional[Dict[str, Any]],
     place_clicks: Optional[int],
     lat_value: Any,
@@ -798,42 +815,63 @@ def update_probe_location(
     if not ctx.triggered:
         raise PreventUpdate
     trigger = ctx.triggered[0]["prop_id"].split(".")[0]
+
     if trigger == "mars-map":
-        latlng = (click_data or {}).get('latlng') if isinstance(click_data, dict) else None
+        latlng = (click_data or {}).get("latlng") if isinstance(click_data, dict) else None
         if not latlng:
             raise PreventUpdate
         try:
-            lat = float(latlng.get('lat'))
-            lon = float(latlng.get('lng'))
+            lat = float(latlng.get("lat"))
+            lon = float(latlng.get("lng"))
         except (TypeError, ValueError):
             raise PreventUpdate
         elevation = fetch_mola_elevation(lat, lon)
-        status = html.Span("Point selected on map. Adjust inputs if needed, then load terrain.", style={"color": "#60a5fa"})
-        probe = {"lat": lat, "lon": lon, "elevation": elevation}
-        return [lat, lon], probe, lat, lon, status
-    if trigger == "probe-marker":
-        if not marker_position or len(marker_position) != 2:
-            raise PreventUpdate
-        lat, lon = float(marker_position[0]), float(marker_position[1])
-        elevation = fetch_mola_elevation(lat, lon)
-        status = html.Span("Marker dragged. Load terrain to sample this spot.", style={"color": "#34d399"})
-        probe = {"lat": lat, "lon": lon, "elevation": elevation}
-        return [lat, lon], probe, lat, lon, status
+        status = html.Span(
+            "Point selected on map. Adjust inputs if needed, then load terrain.",
+            style={"color": "#60a5fa"},
+        )
+        return {"lat": lat, "lon": lon, "elevation": elevation}, status
+
     if trigger == "terrain-place-btn":
         if not place_clicks:
             raise PreventUpdate
         lat = safe_float(lat_value)
         lon = safe_float(lon_value)
         if lat is None or lon is None:
-            status = html.Span("Provide valid latitude and longitude to drop the marker.", style={"color": "#f87171"})
-            return dash.no_update, dash.no_update, dash.no_update, dash.no_update, status
+            status = html.Span(
+                "Provide valid latitude and longitude to drop the marker.",
+                style={"color": "#f87171"},
+            )
+            return dash.no_update, status
         lat = float(lat)
         lon = float(lon)
         elevation = fetch_mola_elevation(lat, lon)
-        status = html.Span("Marker placed using manual coordinates.", style={"color": "#34d399"})
-        probe = {"lat": lat, "lon": lon, "elevation": elevation}
-        return [lat, lon], probe, lat, lon, status
+        status = html.Span(
+            "Marker placed using manual coordinates.",
+            style={"color": "#34d399"},
+        )
+        return {"lat": lat, "lon": lon, "elevation": elevation}, status
+
     raise PreventUpdate
+
+
+@app.callback(
+    Output("probe-marker", "position", allow_duplicate=True),
+    Output("terrain-lat-input", "value", allow_duplicate=True),
+    Output("terrain-lon-input", "value", allow_duplicate=True),
+    Output("feature-lat", "value", allow_duplicate=True),
+    Output("feature-lon", "value", allow_duplicate=True),
+    Input("probe-store", "data"),
+    prevent_initial_call=True,
+)
+def sync_probe_targets(probe: Optional[Dict[str, Any]]):
+    if not probe:
+        raise PreventUpdate
+    lat = safe_float((probe or {}).get("lat"))
+    lon = safe_float((probe or {}).get("lon"))
+    if lat is None or lon is None:
+        raise PreventUpdate
+    return [lat, lon], float(lat), float(lon), float(lat), float(lon)
 
 
 @app.callback(
@@ -861,6 +899,8 @@ def load_terrain_patch(
     if lat is None or lon is None:
         status = html.Span("Provide valid latitude and longitude before loading.", style={"color": "#f87171"})
         return dash.no_update, status, dash.no_update
+    lat = float(lat)
+    lon = float(lon)
     size = float(patch_size or DEFAULT_TERRAIN_PATCH_DEGREES)
     try:
         patch = fetch_mola_patch(lat, lon, size, TERRAIN_PIXEL_RESOLUTION)
@@ -873,7 +913,20 @@ def load_terrain_patch(
         f"Loaded terrain patch {len(latitudes)}x{len(longitudes)} around lat {lat:.2f} deg, lon {lon:.2f} deg",
         style={"color": "#34d399"},
     )
-    updated_probe = {"lat": float(lat), "lon": float(lon), "elevation": safe_float(fetch_mola_elevation(lat, lon))}
+    elevation = None
+    if probe and isinstance(probe, dict):
+        probe_lat = safe_float(probe.get("lat"))
+        probe_lon = safe_float(probe.get("lon"))
+        if (
+            probe_lat is not None
+            and probe_lon is not None
+            and abs(probe_lat - lat) < 1e-6
+            and abs(probe_lon - lon) < 1e-6
+        ):
+            elevation = safe_float(probe.get("elevation"))
+    if elevation is None:
+        elevation = fetch_mola_elevation(lat, lon)
+    updated_probe = {"lat": lat, "lon": lon, "elevation": elevation}
     return patch, status, updated_probe
 
 
@@ -899,8 +952,11 @@ def render_terrain(data: Optional[Dict[str, Any]], exaggeration: Optional[float]
 
 
 @app.callback(
-    Output("feature-store", "data"),
-    Output("save-status", "children"),
+    Output("feature-store", "data", allow_duplicate=True),
+    Output("save-status", "children", allow_duplicate=True),
+    Output("feature-edit-index", "data", allow_duplicate=True),
+    Output("feature-name", "value", allow_duplicate=True),
+    Output("feature-notes", "value", allow_duplicate=True),
     Input("save-feature-btn", "n_clicks"),
     State("feature-store", "data"),
     State("feature-name", "value"),
@@ -910,6 +966,7 @@ def render_terrain(data: Optional[Dict[str, Any]], exaggeration: Optional[float]
     State("observation-slider", "value"),
     State("overlay-catalog-store", "data"),
     State("probe-store", "data"),
+    State("feature-edit-index", "data"),
     prevent_initial_call=True,
 )
 def save_feature(
@@ -922,6 +979,7 @@ def save_feature(
     obs_index: Optional[int],
     catalog: Sequence[Dict[str, Any]],
     probe: Optional[Dict[str, Any]],
+    edit_index: Optional[int],
 ):
     if not n_clicks:
         raise PreventUpdate
@@ -942,7 +1000,7 @@ def save_feature(
 
     if errors:
         message = html.Span(" | ".join(errors), style={"color": "#f87171"})
-        return current_features, message
+        return current_features or [], message, edit_index, name, notes
 
     observation_title = "MOLA global"
     observation_date = "Global"
@@ -951,23 +1009,33 @@ def save_feature(
         observation_title = obs.get("title", observation_title)
         observation_date = obs.get("date", observation_date)
 
+    feature_data = {
+        "name": str(name).strip(),
+        "lat": lat_val,
+        "lon": lon_val,
+        "notes": str(notes).strip() if notes else "",
+        "time": observation_date,
+        "source": "user",
+        "dataset": observation_title,
+    }
+    if probe and isinstance(probe, dict):
+        feature_data["elevation"] = probe.get("elevation")
+
     updated = list(current_features or [])
-    updated.append(
-        {
-            "name": str(name).strip(),
-            "lat": lat_val,
-            "lon": lon_val,
-            "notes": str(notes).strip() if notes else "",
-            "time": observation_date,
-            "source": "user",
-            "dataset": observation_title,
-        }
-    )
-    message = html.Span(
-        f"Saved feature '{name.strip()}' at {lat_val:.2f}N, {lon_val:.2f}E",
-        style={"color": "#34d399"},
-    )
-    return updated, message
+    next_edit_index = None
+    if isinstance(edit_index, int) and 0 <= edit_index < len(updated):
+        updated[edit_index] = feature_data
+        message = html.Span(
+            f"Updated feature '{feature_data['name']}' at {lat_val:.2f}N, {lon_val:.2f}E",
+            style={"color": "#60a5fa"},
+        )
+    else:
+        updated.append(feature_data)
+        message = html.Span(
+            f"Saved feature '{feature_data['name']}' at {lat_val:.2f}N, {lon_val:.2f}E",
+            style={"color": "#34d399"},
+        )
+    return updated, message, next_edit_index, "", ""
 
 
 @app.callback(
@@ -982,20 +1050,41 @@ def render_feature_layers(features: Sequence[Dict[str, Any]]):
     markers = build_feature_markers(features)
 
     cards: List[html.Div] = []
-    for feature in features:
+    for idx, feature in enumerate(features):
         cards.append(
             html.Div(
                 [
-                    html.Strong(feature.get("name", "Feature")),
-                    html.Span(
-                        f"Lat {feature.get('lat', 0):.2f}, Lon {feature.get('lon', 0):.2f}",
-                        style={"fontSize": "0.9rem", "opacity": 0.8},
+                    html.Div(
+                        [
+                            html.Strong(feature.get("name", "Feature")),
+                            html.Span(
+                                f"Lat {feature.get('lat', 0):.2f}, Lon {feature.get('lon', 0):.2f}",
+                                style={"fontSize": "0.9rem", "opacity": 0.8},
+                            ),
+                            html.Span(
+                                f"Observed: {feature.get('time', 'N/A')} - {feature.get('dataset', 'Dataset')}",
+                                style={"fontSize": "0.8rem", "opacity": 0.7},
+                            ),
+                            html.Span(feature.get("notes", ""), style={"fontSize": "0.8rem"}),
+                        ]
                     ),
-                    html.Span(
-                        f"Observed: {feature.get('time', 'N/A')} - {feature.get('dataset', 'Dataset')}",
-                        style={"fontSize": "0.8rem", "opacity": 0.7},
+                    html.Div(
+                        [
+                            html.Button(
+                                "Edit",
+                                id={"type": "feature-edit", "index": idx},
+                                n_clicks=0,
+                                style={"flex": "1", "padding": "0.35rem", "backgroundColor": "#2563eb", "color": "#e2e8f0", "border": "none", "borderRadius": "0.3rem"},
+                            ),
+                            html.Button(
+                                "Delete",
+                                id={"type": "feature-delete", "index": idx},
+                                n_clicks=0,
+                                style={"flex": "1", "padding": "0.35rem", "backgroundColor": "#dc2626", "color": "#f8fafc", "border": "none", "borderRadius": "0.3rem"},
+                            ),
+                        ],
+                        style={"display": "flex", "gap": "0.5rem", "marginTop": "0.6rem"},
                     ),
-                    html.Span(feature.get("notes", ""), style={"fontSize": "0.8rem"}),
                 ],
                 style={
                     "backgroundColor": "#111c34",
@@ -1006,6 +1095,68 @@ def render_feature_layers(features: Sequence[Dict[str, Any]]):
             )
         )
     return markers, cards
+
+
+@app.callback(
+    Output("probe-store", "data", allow_duplicate=True),
+    Output("feature-name", "value", allow_duplicate=True),
+    Output("feature-notes", "value", allow_duplicate=True),
+    Output("feature-edit-index", "data"),
+    Output("terrain-status", "children", allow_duplicate=True),
+    Input({"type": "feature-edit", "index": ALL}, "n_clicks"),
+    State("feature-store", "data"),
+    prevent_initial_call=True,
+)
+def on_feature_edit(n_clicks, features):
+    index = get_dynamic_callback_index("feature-edit")
+    if (
+        features is None
+        or not isinstance(index, int)
+        or index < 0
+        or index >= len(features)
+    ):
+        raise PreventUpdate
+    feature = features[index]
+    lat = float(feature.get("lat", 0.0))
+    lon = float(feature.get("lon", 0.0))
+    name = feature.get("name", "")
+    notes = feature.get("notes", "")
+    probe = {"lat": lat, "lon": lon, "elevation": feature.get("elevation")}
+    status = html.Span(
+        f"Editing feature '{name}'. Adjust details and press Save feature to update.",
+        style={"color": "#38bdf8"},
+    )
+    return probe, name, notes, index, status
+
+
+@app.callback(
+    Output("feature-store", "data", allow_duplicate=True),
+    Output("save-status", "children", allow_duplicate=True),
+    Output("feature-edit-index", "data", allow_duplicate=True),
+    Input({"type": "feature-delete", "index": ALL}, "n_clicks"),
+    State("feature-store", "data"),
+    State("feature-edit-index", "data"),
+    prevent_initial_call=True,
+)
+def on_feature_delete(n_clicks, features, edit_index):
+    index = get_dynamic_callback_index("feature-delete")
+    if (
+        features is None
+        or not isinstance(index, int)
+        or index < 0
+        or index >= len(features)
+    ):
+        raise PreventUpdate
+    updated = list(features)
+    removed = updated.pop(index)
+    message = html.Span(f"Deleted feature '{removed.get('name', 'Feature')}'.", style={"color": "#f97316"})
+    new_edit_index = edit_index
+    if isinstance(edit_index, int):
+        if edit_index == index:
+            new_edit_index = None
+        elif edit_index > index:
+            new_edit_index = edit_index - 1
+    return updated, message, new_edit_index
 
 
 if __name__ == "__main__":
