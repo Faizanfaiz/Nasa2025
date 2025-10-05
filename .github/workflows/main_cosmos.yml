@@ -30,8 +30,12 @@ jobs:
           source venv/bin/activate
       
       - name: Install dependencies
-        run: pip install -r requirements
-        
+        run: |
+          pip install -r requirements
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install dependencies
+        run: wget -nc https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth
       # Optional: Add step to run tests here (PyTest, Django test suites, etc.)
 
       - name: Upload artifact for deployment jobs
@@ -60,3 +64,4 @@ jobs:
           slot-name: 'Production'
 
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_69C5CE178FE84439865662BE83CE5A1D }}
+
