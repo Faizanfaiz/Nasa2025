@@ -1,6 +1,0 @@
-dash==2.16.1
-dash-leaflet==0.1.28
-plotly==5.22.0
-numpy==1.26.4
-pillow==10.3.0
-requests==2.32.3
