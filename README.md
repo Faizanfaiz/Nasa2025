@@ -36,6 +36,8 @@ A comprehensive Mars surface exploration tool that combines NASA's Mars Global S
    ```bash
    pip install -r requirements
    ```
+   
+   **Note**: The requirements file is configured for CPU-only PyTorch installation. This ensures compatibility across different systems without requiring CUDA/GPU setup.
 
 4. **Download SAM Model Checkpoint**:
    
@@ -119,7 +121,7 @@ sam_checkpoint = "sam_vit_b_01ec64.pth"  # Change to corresponding checkpoint
 ### Performance Notes
 - SAM model loads on first use (may take 10-30 seconds)
 - ViT-B model recommended for most users
-- GPU acceleration available if CUDA is installed
+- **CPU-only installation** (PyTorch CPU version included in requirements)
 - Terrain patches are cached for better performance
 
 ## Troubleshooting
