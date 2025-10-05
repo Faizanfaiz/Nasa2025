@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 from functools import lru_cache
+import os
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import io
@@ -2093,7 +2094,7 @@ if SAM_VIEWER_AVAILABLE:
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run_server(debug=False, host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))
 
 
 
